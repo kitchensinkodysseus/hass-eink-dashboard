@@ -1,7 +1,21 @@
 {%- from "_macros.svg.j2" import widget_title, card_container,
     card_row -%}
+{#- Wall panel: white on blue.  These shadow the values supplied by
+    _color_context() and the Python context builder, so no fill
+    attribute below needs changing. -#}
+{%- set hex_black = "#FFFFFF" -%}
+{%- set hex_gray = "#FFFFFF" -%}
+{%- set hex_light_gray = "#FFFFFF" -%}
+{%- set primary_fill = "#FFFFFF" -%}
+{%- set secondary_fill = "#FFFFFF" -%}
+{%- set value_fill = "#FFFFFF" -%}
+{%- set icon_color = "#FFFFFF" -%}
+{%- set icon_no_circle = true -%}
+{%- set card_style = "none" -%}
 <svg xmlns="http://www.w3.org/2000/svg"
      width="{{ w }}" height="{{ h }}">
+<rect x="0" y="0" width="{{ w }}" height="{{ h }}"
+      fill="#0000FF"/>
 {%- if has_rows -%}
 {{ widget_title(title, title_font_sz, fill=hex_gray) }}
 {%- call card_container(

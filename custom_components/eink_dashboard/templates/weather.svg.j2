@@ -1,16 +1,29 @@
 {%- from "_macros.svg.j2" import card_container -%}
+{%- set c_fg = "#FFFFFF" -%}
+{%- set c_muted = "#FFFFFF" -%}
+{%- set c_rule = "#FFFFFF" -%}
+{%- set bg_color = "#0000FF" -%}
+{%- set card_style = "none" -%}
 <svg xmlns="http://www.w3.org/2000/svg"
      width="{{ w }}" height="{{ h }}">
+<rect x="0" y="0" width="{{ w }}" height="{{ h }}"
+      fill="{{ bg_color }}"/>
 {%- if has_state -%}
+{#- Vertical centring: total_h is the height of the rendered
+    content, h is the full canvas.  Both are only present on the
+    has_state path, hence the set inside this block. -#}
+{%- set y_off = ((h - total_h) // 2) if h > total_h else 0 -%}
+<g transform="translate(0, {{ y_off }})">
 {%- call card_container(
     x=0, y=0, w=card_w, h=total_h,
     card_style=card_style,
     radius=m_radius, border=m_border,
     bar_width=bar_width,
-    border_color=hex_black, bar_color=hex_gray) -%}
+    border_color=c_fg, bar_color=c_muted) -%}
 {# Row 1: condition icon, temperature, today hi/lo/precip. #}
 {%- if icon_svg -%}
-<g transform="translate({{ icon_x }}, {{ icon_y }})">{{ icon_svg }}</g>
+<g transform="translate({{ icon_x }}, {{ icon_y }})"
+   fill="{{ c_fg }}" color="{{ c_fg }}">{{ icon_svg }}</g>
 {%- endif -%}
 <text
   x="{{ temp_x }}" y="{{ temp_y }}"
@@ -18,7 +31,7 @@
   font-size="{{ font_xl }}"
   font-weight="bold"
   dominant-baseline="central"
-  fill="{{ hex_black }}">{{ temp_text }}</text>
+  fill="{{ c_fg }}">{{ temp_text }}</text>
 {%- if hi_text -%}
 <text
   x="{{ hilo_right }}" y="{{ hi_y }}"
@@ -26,7 +39,7 @@
   font-size="{{ font_sm }}"
   text-anchor="end"
   dominant-baseline="hanging"
-  fill="{{ hex_black }}">{{ hi_text }}</text>
+  fill="{{ c_fg }}">{{ hi_text }}</text>
 {%- endif -%}
 {%- if lo_text -%}
 <text
@@ -35,7 +48,7 @@
   font-size="{{ font_sm }}"
   text-anchor="end"
   dominant-baseline="hanging"
-  fill="{{ hex_gray }}">{{ lo_text }}</text>
+  fill="{{ c_muted }}">{{ lo_text }}</text>
 {%- endif -%}
 {%- if precip_text -%}
 <text
@@ -44,67 +57,71 @@
   font-size="{{ font_xs }}"
   text-anchor="end"
   dominant-baseline="hanging"
-  fill="{{ hex_gray }}">{{ precip_text }}</text>
+  fill="{{ c_muted }}">{{ precip_text }}</text>
 {%- endif -%}
 {# Detail row: icon + text pairs for each weather attribute. #}
 {%- for d in detail_items -%}
 {%- if d.icon_svg -%}
-<g transform="translate({{ d.icon_x }}, {{ d.icon_y }})">{{ d.icon_svg }}</g>
+<g transform="translate({{ d.icon_x }}, {{ d.icon_y }})"
+   fill="{{ c_fg }}" color="{{ c_fg }}">{{ d.icon_svg }}</g>
 {%- endif -%}
 <text
   x="{{ d.text_x }}" y="{{ d.text_y }}"
   font-family="Roboto"
   font-size="{{ font_sm }}"
   dominant-baseline="central"
-  fill="{{ hex_black }}">{{ d.text }}</text>
+  fill="{{ c_fg }}">{{ d.text }}</text>
 {%- endfor -%}
-{# Separator and forecast grid. #}
+{# Separator and forecast grid.  Forecast type is 50% larger
+   than the detail row above, so it stays legible at distance. #}
 {%- if has_forecast -%}
 <line
   x1="{{ sep_x1 }}" y1="{{ sep_y }}"
   x2="{{ sep_x2 }}" y2="{{ sep_y }}"
-  stroke="{{ hex_light_gray }}"
+  stroke="{{ c_rule }}"
   stroke-width="{{ sep_thickness }}"/>
 {%- for day in forecast_entries -%}
 <text
   x="{{ day.cx }}" y="{{ day.label_y }}"
   font-family="Roboto"
-  font-size="{{ font_sm }}"
+  font-size="{{ font_fc }}"
   text-anchor="middle"
   dominant-baseline="hanging"
-  fill="{{ hex_gray }}">{{ day.label }}</text>
+  fill="{{ c_muted }}">{{ day.label }}</text>
 {%- if day.icon_svg -%}
-<g transform="translate({{ day.icon_x }}, {{ day.icon_y }})">{{ day.icon_svg }}</g>
+<g transform="translate({{ day.icon_x }}, {{ day.icon_y }})"
+   fill="{{ c_fg }}" color="{{ c_fg }}">{{ day.icon_svg }}</g>
 {%- endif -%}
 {%- if day.hi -%}
 <text
   x="{{ day.cx }}" y="{{ day.hi_y }}"
   font-family="Roboto"
-  font-size="{{ font_sm }}"
+  font-size="{{ font_fc }}"
   text-anchor="middle"
   dominant-baseline="hanging"
-  fill="{{ hex_black }}">{{ day.hi }}</text>
+  fill="{{ c_fg }}">{{ day.hi }}</text>
 {%- endif -%}
 {%- if day.lo -%}
 <text
   x="{{ day.cx }}" y="{{ day.lo_y }}"
   font-family="Roboto"
-  font-size="{{ font_sm }}"
+  font-size="{{ font_fc }}"
   text-anchor="middle"
   dominant-baseline="hanging"
-  fill="{{ hex_gray }}">{{ day.lo }}</text>
+  fill="{{ c_muted }}">{{ day.lo }}</text>
 {%- endif -%}
 {%- if day.precip -%}
 <text
   x="{{ day.cx }}" y="{{ day.precip_y }}"
   font-family="Roboto"
-  font-size="{{ font_xs }}"
+  font-size="{{ font_fc_xs }}"
   text-anchor="middle"
   dominant-baseline="hanging"
-  fill="{{ hex_gray }}">{{ day.precip }}</text>
+  fill="{{ c_muted }}">{{ day.precip }}</text>
 {%- endif -%}
 {%- endfor -%}
 {%- endif -%}
 {%- endcall -%}
+</g>
 {%- endif -%}
 </svg>

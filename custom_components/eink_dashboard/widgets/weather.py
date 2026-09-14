@@ -55,23 +55,37 @@ _WX_ROW_H = 48  # 48, not DEFAULT_ROW_H (56): matches original PIL proportions
 _WX_NATURAL_W = 380  # natural card width
 _WX_ICON = 80  # condition icon diameter
 _WX_FONT_XL = 64  # temperature font size (bold)
-_WX_FONT_SM = 16  # hi/lo, detail, and forecast font
+_WX_FONT_SM = 16  # hi/lo and detail font
 _WX_FONT_XS = 14  # precipitation text font
 _WX_ICON_R_PAD = 16  # gap: condition icon → temp text
 _WX_DETAIL_GAP = 2  # vertical gap above detail row
 _WX_DETAIL_ICON_H = 20  # detail icon height
 _WX_ICON_GAP = 4  # gap: detail icon → its text
 _WX_SEP_GAP = 8  # gap above/below separator line
-_WX_FC_ZONE_H = 88  # forecast zone height
-_WX_PRECIP_H = _WX_FONT_SM  # line height matches font
-_WX_FC_ICON = 32  # forecast day icon diameter
-_WX_FC_ICON_CY = 34  # forecast icon centre Y offset
-_WX_FC_HI_Y = 52  # forecast hi-temp text Y offset
-_WX_FC_LO_Y = 70  # forecast lo-temp text Y offset
+
+# Forecast strip, enlarged 50% over the original proportions so it
+# stays legible at wall-viewing distance.  These are deliberately
+# independent of _WX_FONT_SM/_WX_FONT_XS, which still govern the
+# today hi/lo column and the detail row above the separator.
+_WX_FC_ICON = 48  # 32 x 1.5 - forecast day icon diameter
+_WX_FC_FONT = 24  # 16 x 1.5 - forecast day label and hi/lo font
+_WX_FC_FONT_XS = 21  # 14 x 1.5 - forecast precipitation font
+_WX_FC_ZONE_H = 132  # 88 x 1.5 - forecast zone height
+_WX_FC_ICON_CY = 51  # 34 x 1.5 - forecast icon centre Y offset
+_WX_FC_HI_Y = 78  # 52 x 1.5 - forecast hi-temp text Y offset
+_WX_FC_LO_Y = 105  # 70 x 1.5 - forecast lo-temp text Y offset
+_WX_PRECIP_H = _WX_FC_FONT_XS  # line height matches forecast font
 _WX_FC_PRECIP_Y = _WX_FC_ZONE_H  # precip text at zone bottom
 _WX_MIN_FC_COLS = 5  # minimum forecast column count
 _WX_LO_Y_FRAC = 0.4  # lo temp Y as fraction of temp_h
 _WX_PRECIP_Y_FRAC = 0.72  # precip text Y as fraction of temp_h
+
+# Lowest precipitation probability (%) worth printing.  Providers
+# that report a probability for every day would otherwise fill the
+# forecast strip with values like "1%", which is visual noise on a
+# panel read at a distance.  Raise to 10 or 20 to show only days
+# where rain is a realistic prospect.
+_WX_PRECIP_PROB_MIN = 10
 
 _DETAIL_ICON_MAP: dict[str, str] = {
     "humidity": "wi-humidity",
@@ -79,6 +93,75 @@ _DETAIL_ICON_MAP: dict[str, str] = {
     "wind": "wi-strong-wind",
     "cloud": "wi-cloud",
 }
+
+
+def _round_or_blank(value: Any) -> Any:
+    """Return ``value`` rounded to a whole number, or unchanged.
+
+    Temperatures and precipitation are displayed without decimals
+    on the wall panel, where a tenth of a degree is illegible and
+    carries no useful information.  Values that are absent or
+    non-numeric pass through untouched so the existing empty-string
+    and ``None`` handling downstream still works.
+
+    Args:
+        value: Numeric value, numeric string, ``None``, or ``""``.
+
+    Returns:
+        The value rounded to the nearest integer, or the original
+        value when it is not numeric.
+    """
+    if value is None or value == "":
+        return value
+    try:
+        return round(float(value))
+    except (TypeError, ValueError):
+        return value
+
+
+def _precip_text(
+    amount: Any,
+    probability: Any,
+    unit: str,
+    config: DisplayConfig,
+) -> str:
+    """Return the precipitation string for a forecast entry.
+
+    Prefers a measured amount where the provider supplies one.
+    Falls back to probability of precipitation otherwise: the Met
+    Office DataHub daily forecast, for instance, reports
+    ``precipitation`` as ``None`` on every day and carries the
+    information in ``precipitation_probability`` instead.
+
+    Amounts below 0.5 mm are suppressed rather than rounded, since
+    rounding them would print a misleading "0mm" on a day that is
+    in fact lightly wet.
+
+    Args:
+        amount: Forecast ``precipitation`` value, possibly ``None``.
+        probability: Forecast ``precipitation_probability`` value as
+            a percentage, possibly ``None``.
+        unit: Precipitation unit string from the entity attributes.
+        config: Display config, used for locale number formatting.
+
+    Returns:
+        Formatted string such as ``"3mm"`` or ``"26%"``, or an empty
+        string when neither value is worth displaying.
+    """
+    try:
+        if amount is not None and float(amount) >= 0.5:
+            return f"{_fmt(str(_round_or_blank(amount)), config)}{unit}"
+    except (TypeError, ValueError):
+        pass
+    try:
+        if (
+            probability is not None
+            and float(probability) >= _WX_PRECIP_PROB_MIN
+        ):
+            return f"{_fmt(str(round(float(probability))), config)}%"
+    except (TypeError, ValueError):
+        pass
+    return ""
 
 
 def _resolve_sensor_override(
@@ -141,7 +224,7 @@ def _cap_weather_font_xl(
             measurement).
         font_sm: PIL font for hi/lo text measurement.
         font_xs: PIL font for precipitation text measurement.
-        temp_text: Formatted temperature string (e.g. "13.8°C").
+        temp_text: Formatted temperature string (e.g. "14°C").
         avail: Pixel budget between temp_x and the hi/lo column.
         today_hi: High-temperature string (may be empty).
         today_lo: Low-temperature string (may be empty).
@@ -195,7 +278,6 @@ def _build_weather_context(
         _fmt_temp,
         _load_font,
         _weekday_abbrev,
-        format_number,
     )
 
     entity_id = widget.get("entity", "")
@@ -260,7 +342,7 @@ def _build_weather_context(
     # When a sensor entity is configured and present in states, its
     # state value replaces the weather entity's attribute.
     temp_entity = widget.get("temperature_entity", "")
-    temp, temp_unit, use_temp_sensor = (
+    temp, temp_unit, _use_temp_sensor = (
         _resolve_sensor_override(temp_entity, states, temp, temp_unit)
         if temp_entity
         else (temp, temp_unit, False)
@@ -295,13 +377,14 @@ def _build_weather_context(
     # estimation.
     nf = config.get("number_format", "language")
     lang = config.get("language", "en")
-    if use_temp_sensor:
-        # Sensor temperatures always show one decimal place (e.g.
-        # "22.0°C") so readings like 18.7 are not truncated and
-        # whole numbers still convey precision.
-        temp_text = f"{format_number(f'{temp:.1f}', nf, lang)}{temp_unit}"
+    # Whole degrees only: a tenth of a degree is unreadable at
+    # wall distance and adds nothing.  The guard keeps the "--"
+    # fallback (and any other non-numeric state) working.
+    temp_rounded = _round_or_blank(temp)
+    if isinstance(temp_rounded, int):
+        temp_text = f"{_fmt_temp(temp_rounded, nf, lang)}{temp_unit}"
     else:
-        temp_text = f"{_fmt_temp(temp, nf, lang)}{temp_unit}"
+        temp_text = f"{temp}{temp_unit}"
     temp_bbox = font_xl.getbbox(temp_text)
     temp_h = temp_bbox[3] - temp_bbox[1]
 
@@ -357,15 +440,18 @@ def _build_weather_context(
     precip_unit_fc = attrs.get("precipitation_unit", "mm")
     if forecast:
         today = forecast[0]
-        hi_val = today.get("temperature")
-        lo_val = today.get("templow")
-        p_val = today.get("precipitation")
+        hi_val = _round_or_blank(today.get("temperature"))
+        lo_val = _round_or_blank(today.get("templow"))
         if hi_val is not None:
             today_hi = f"{_fmt_temp(hi_val, nf, lang)}°"
         if lo_val is not None:
             today_lo = f"{_fmt_temp(lo_val, nf, lang)}°"
-        if p_val is not None:
-            today_precip = f"{_fmt(str(p_val), config)}{precip_unit_fc}"
+        today_precip = _precip_text(
+            today.get("precipitation"),
+            today.get("precipitation_probability"),
+            precip_unit_fc,
+            config,
+        )
 
     # Cap font_xl so temp text doesn't overlap the hi/lo column.
     font_xl_size = _cap_weather_font_xl(
@@ -519,19 +605,19 @@ def _build_weather_context(
             except (KeyError, FileNotFoundError):
                 fc_icon_svg = ""
 
-            fc_hi_val = day.get("temperature", "")
-            fc_lo_val = day.get("templow", "")
+            fc_hi_val = _round_or_blank(day.get("temperature", ""))
+            fc_lo_val = _round_or_blank(day.get("templow", ""))
             fc_hi = (
                 f"{_fmt_temp(fc_hi_val, nf, lang)}°" if fc_hi_val != "" else ""
             )
             fc_lo = (
                 f"{_fmt_temp(fc_lo_val, nf, lang)}°" if fc_lo_val != "" else ""
             )
-            fc_p = day.get("precipitation")
-            fc_precip = (
-                f"{_fmt(str(fc_p), config)}{precip_unit_fc}"
-                if fc_p is not None and fc_p > 0
-                else ""
+            fc_precip = _precip_text(
+                day.get("precipitation"),
+                day.get("precipitation_probability"),
+                precip_unit_fc,
+                config,
             )
             icon_cy_fc = forecast_y + round(_WX_FC_ICON_CY * scale)
             forecast_entries.append(
@@ -571,6 +657,9 @@ def _build_weather_context(
         "font_sm": round(_WX_FONT_SM * scale),
         # font_xs is template-only; no PIL measurement needed.
         "font_xs": round(_WX_FONT_XS * scale),
+        # Forecast strip fonts, 50% larger than the row above.
+        "font_fc": round(_WX_FC_FONT * scale),
+        "font_fc_xs": round(_WX_FC_FONT_XS * scale),
         "hilo_right": hilo_right,
         "hi_text": today_hi,
         "hi_y": vis_top,
