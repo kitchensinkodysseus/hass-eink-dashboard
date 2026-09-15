@@ -3,7 +3,14 @@
     _build_weather_wall_context(); this template only draws.
 
     The palette is the panel's four usable native states: blue
-    ground, white, black and yellow.  Nothing here dithers. -#}
+    ground, white, black and yellow.  Nothing here dithers.
+
+    The weather icons are defined inline rather than loaded from
+    icons/svg/, because _build_inline_svg() flattens every path to
+    a single colour and would lose the yellow sun and the black
+    rain-bearing cloud.  The cloud shape is repeated in full in
+    each icon rather than referenced, since resvg's handling of a
+    <use> that points at another <use> is not guaranteed. -#}
 {%- set c_bg = "#0000FF" -%}
 {%- set c_fg = "#FFFFFF" -%}
 {%- set c_dark = "#000000" -%}
@@ -50,13 +57,198 @@
     same paths mirrored. -#}
 <g id="m-new"><circle cx="0" cy="0" r="9" fill="none"
    stroke="{{ c_fg }}" stroke-width="1.3"/></g>
-<g id="m-crescent"><path d="M 0 -9 A 9 9 0 0 1 0 9 A 4 9 0 0 0 0 -9 Z"
+<g id="m-crescent"><path
+   d="M 0 -9 A 9 9 0 0 1 0 9 A 4 9 0 0 0 0 -9 Z"
    fill="{{ c_fg }}"/></g>
 <g id="m-quarter"><path d="M 0 -9 A 9 9 0 0 1 0 9 Z"
    fill="{{ c_fg }}"/></g>
-<g id="m-gibbous"><path d="M 0 -9 A 9 9 0 0 1 0 9 A 4 9 0 0 1 0 -9 Z"
+<g id="m-gibbous"><path
+   d="M 0 -9 A 9 9 0 0 1 0 9 A 4 9 0 0 1 0 -9 Z"
    fill="{{ c_fg }}"/></g>
 <g id="m-full"><circle cx="0" cy="0" r="9" fill="{{ c_fg }}"/></g>
+{#- Weather icons, drawn in a 24-unit box centred on the origin.
+    Every cloud sits at the same coordinates so precipitation
+    hangs below rather than displacing the cloud upward. -#}
+<g id="wx-sun">
+  <circle cx="0" cy="0" r="6" fill="{{ c_sun }}"/>
+  <g stroke="{{ c_sun }}" stroke-width="1.7">
+    <line x1="0" y1="-8" x2="0" y2="-10.5"/>
+    <line x1="0" y1="8" x2="0" y2="10.5"/>
+    <line x1="-8" y1="0" x2="-10.5" y2="0"/>
+    <line x1="8" y1="0" x2="10.5" y2="0"/>
+    <line x1="-5.7" y1="-5.7" x2="-7.4" y2="-7.4"/>
+    <line x1="5.7" y1="5.7" x2="7.4" y2="7.4"/>
+    <line x1="5.7" y1="-5.7" x2="7.4" y2="-7.4"/>
+    <line x1="-5.7" y1="5.7" x2="-7.4" y2="7.4"/>
+  </g>
+</g>
+<g id="wx-moon-clear">
+  <g transform="scale(1.15)"><use href="#m-gibbous"/></g>
+</g>
+<g id="wx-clear-night">
+  <g transform="scale(1.15)"><use href="#m-gibbous"/></g>
+</g>
+<g id="wx-cloud" fill="{{ c_fg }}">
+  <circle cx="-5" cy="1" r="5"/>
+  <circle cx="2" cy="-3" r="7"/>
+  <circle cx="8" cy="2" r="4.5"/>
+  <rect x="-5" y="2" width="13" height="4.5"/>
+</g>
+<g id="wx-cloud-dark">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5.2" cy="1" r="6.2"/>
+    <circle cx="2.1" cy="-3.2" r="8.2"/>
+    <circle cx="8.4" cy="2" r="5.7"/>
+    <rect x="-5.2" y="1.8" width="13.6" height="5.9"/>
+  </g>
+  <g fill="{{ c_dark }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+</g>
+<g id="wx-sun-cloud">
+  <circle cx="5" cy="-9" r="4.5" fill="{{ c_sun }}"/>
+  <g stroke="{{ c_sun }}" stroke-width="1.5">
+    <line x1="5" y1="-16" x2="5" y2="-18.2"/>
+    <line x1="11" y1="-13" x2="12.8" y2="-14.4"/>
+  </g>
+  <g fill="{{ c_fg }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+</g>
+<g id="wx-moon-cloud">
+  <g transform="translate(5,-11) scale(0.6)">
+    <use href="#m-gibbous"/>
+  </g>
+  <g fill="{{ c_fg }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+</g>
+<g id="wx-rain1">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <line x1="2" y1="9" x2="0.5" y2="14"
+        stroke="{{ c_fg }}" stroke-width="1.9"/>
+</g>
+<g id="wx-rain2">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5.2" cy="1" r="6.2"/>
+    <circle cx="2.1" cy="-3.2" r="8.2"/>
+    <circle cx="8.4" cy="2" r="5.7"/>
+    <rect x="-5.2" y="1.8" width="13.6" height="5.9"/>
+  </g>
+  <g fill="{{ c_dark }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <g stroke="{{ c_fg }}" stroke-width="1.9">
+    <line x1="-1" y1="9" x2="-2.5" y2="14"/>
+    <line x1="5" y1="9" x2="3.5" y2="14"/>
+  </g>
+</g>
+<g id="wx-rain3">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5.2" cy="1" r="6.2"/>
+    <circle cx="2.1" cy="-3.2" r="8.2"/>
+    <circle cx="8.4" cy="2" r="5.7"/>
+    <rect x="-5.2" y="1.8" width="13.6" height="5.9"/>
+  </g>
+  <g fill="{{ c_dark }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <g stroke="{{ c_fg }}" stroke-width="1.9">
+    <line x1="-4" y1="9" x2="-5.5" y2="14"/>
+    <line x1="2" y1="9" x2="0.5" y2="14"/>
+    <line x1="8" y1="9" x2="6.5" y2="14"/>
+  </g>
+</g>
+<g id="wx-flake" stroke="{{ c_fg }}" stroke-width="1.3">
+  <line x1="-2.2" y1="0" x2="2.2" y2="0"/>
+  <line x1="-1.1" y1="-1.9" x2="1.1" y2="1.9"/>
+  <line x1="-1.1" y1="1.9" x2="1.1" y2="-1.9"/>
+</g>
+<g id="wx-snow1">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <g transform="translate(2,11.5)"><use href="#wx-flake"/></g>
+</g>
+<g id="wx-snow2">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <g transform="translate(-1,11.5)"><use href="#wx-flake"/></g>
+  <g transform="translate(5,11.5)"><use href="#wx-flake"/></g>
+</g>
+<g id="wx-snow3">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5.2" cy="1" r="6.2"/>
+    <circle cx="2.1" cy="-3.2" r="8.2"/>
+    <circle cx="8.4" cy="2" r="5.7"/>
+    <rect x="-5.2" y="1.8" width="13.6" height="5.9"/>
+  </g>
+  <g fill="{{ c_dark }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <g transform="translate(-5,11.5)"><use href="#wx-flake"/></g>
+  <g transform="translate(1,11.5)"><use href="#wx-flake"/></g>
+  <g transform="translate(7,11.5)"><use href="#wx-flake"/></g>
+</g>
+<g id="wx-storm">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5.2" cy="1" r="6.2"/>
+    <circle cx="2.1" cy="-3.2" r="8.2"/>
+    <circle cx="8.4" cy="2" r="5.7"/>
+    <rect x="-5.2" y="1.8" width="13.6" height="5.9"/>
+  </g>
+  <g fill="{{ c_dark }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <path d="M 2.4 5.6 L -1.0 11.6 L 2.0 10.2 L -1.4 16.2"
+        fill="none" stroke="{{ c_sun }}" stroke-width="2.6"
+        stroke-linecap="butt" stroke-linejoin="bevel"/>
+</g>
+<g id="wx-fog">
+  <g fill="{{ c_fg }}">
+    <circle cx="-5" cy="1" r="5"/>
+    <circle cx="2" cy="-3" r="7"/>
+    <circle cx="8" cy="2" r="4.5"/>
+    <rect x="-5" y="2" width="13" height="4.5"/>
+  </g>
+  <g stroke="{{ c_fg }}" stroke-width="1.9" stroke-linecap="round">
+    <line x1="-8" y1="10" x2="6" y2="10"/>
+    <line x1="-5" y1="14" x2="9" y2="14"/>
+  </g>
+</g>
 </defs>
 <rect x="0" y="0" width="{{ w }}" height="{{ h }}" fill="{{ c_bg }}"/>
 {%- if is_night -%}
@@ -75,7 +267,7 @@
       font-size="{{ font_s }}" fill="{{ c_fg }}"
       font-family="Roboto">{{ header_left }}</text>
 {%- endif -%}
-{%- if header_max is defined and header_max -%}
+{%- if header_max -%}
 <text x="{{ right_right - 132 }}" y="{{ y_date }}"
       font-size="{{ font_s }}" text-anchor="end" fill="{{ c_fg }}"
       font-family="Roboto">{{ header_max }}</text>
@@ -85,26 +277,32 @@
       text-anchor="end" fill="{{ c_fg }}"
       font-family="Roboto">{{ header_uv }}</text>
 {%- endif -%}
-{#- The hero: a moon phase when the sky is clear enough to see
+{#- The hero: a moon phase when the sky is clear enough to show
     one, otherwise the weather condition. -#}
 {%- if moon_phase -%}
 <g transform="translate({{ hero_cx }}, {{ hero_cy }})
-   scale({{ (hero_px / 18.0)|round(3) }}
-   {%- if moon_phase.startswith('wane') %}, {{ (hero_px / 18.0)|round(3) }}{% endif %})">
-{%- if moon_phase == 'new' -%}<use href="#m-new"/>
-{%- elif moon_phase in ('wax_crescent', 'wane_crescent') -%}
-<g{% if moon_phase.startswith('wane') %} transform="scale(-1,1)"{% endif %}><use href="#m-crescent"/></g>
-{%- elif moon_phase in ('first_quarter', 'last_quarter') -%}
-<g{% if moon_phase == 'last_quarter' %} transform="scale(-1,1)"{% endif %}><use href="#m-quarter"/></g>
-{%- elif moon_phase in ('wax_gibbous', 'wane_gibbous') -%}
-<g{% if moon_phase.startswith('wane') %} transform="scale(-1,1)"{% endif %}><use href="#m-gibbous"/></g>
-{%- else -%}<use href="#m-full"/>
+   scale({{ hero_scale }})">
+{%- if moon_phase == 'new' -%}
+<use href="#m-new"/>
+{%- elif moon_phase == 'wax_crescent' -%}
+<use href="#m-crescent"/>
+{%- elif moon_phase == 'wane_crescent' -%}
+<g transform="scale(-1,1)"><use href="#m-crescent"/></g>
+{%- elif moon_phase == 'first_quarter' -%}
+<use href="#m-quarter"/>
+{%- elif moon_phase == 'last_quarter' -%}
+<g transform="scale(-1,1)"><use href="#m-quarter"/></g>
+{%- elif moon_phase == 'wax_gibbous' -%}
+<use href="#m-gibbous"/>
+{%- elif moon_phase == 'wane_gibbous' -%}
+<g transform="scale(-1,1)"><use href="#m-gibbous"/></g>
+{%- else -%}
+<use href="#m-full"/>
 {%- endif -%}
 </g>
 {%- elif hero_icon -%}
-<g transform="translate({{ hero_cx - hero_px // 2 }},
-   {{ hero_cy - hero_px // 2 }})"
-   fill="{{ c_fg }}" style="color: {{ c_fg }}">{{ hero_icon }}</g>
+<g transform="translate({{ hero_cx }}, {{ hero_cy }})
+   scale({{ hero_scale }})"><use href="#{{ hero_icon }}"/></g>
 {%- endif -%}
 {%- if headline.show -%}
 <text x="{{ temp_x }}" y="{{ y_headline }}" font-size="{{ font_xl }}"
@@ -153,9 +351,9 @@
 <text x="{{ hr.cx }}" y="{{ y_hour_label }}" font-size="{{ font_s }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="Roboto">{{ hr.label }}</text>
-{%- if hr.icon_svg -%}
-<g transform="translate({{ hr.cx - 21 }}, {{ hour_icon_cy - 21 }})"
-   fill="{{ c_fg }}" style="color: {{ c_fg }}">{{ hr.icon_svg }}</g>
+{%- if hr.icon -%}
+<g transform="translate({{ hr.cx }}, {{ hour_icon_cy }})
+   scale({{ hour_scale }})"><use href="#{{ hr.icon }}"/></g>
 {%- endif -%}
 {%- if hr.temp.show -%}
 <text x="{{ hr.cx }}" y="{{ y_hour_temp }}" font-size="{{ font_m }}"
@@ -179,14 +377,14 @@
 {%- endif -%}
 <line x1="{{ margin }}" y1="{{ y_rule }}" x2="{{ w - margin }}"
       y2="{{ y_rule }}" stroke="{{ c_fg }}" stroke-width="1.5"/>
-{#- The seven-day strip. -#}
+{#- The day strip. -#}
 {%- for d in days -%}
 <text x="{{ d.cx }}" y="{{ y_day_label }}" font-size="{{ font_s }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="Roboto">{{ d.label }}</text>
-{%- if d.icon_svg -%}
-<g transform="translate({{ d.cx - 25 }}, {{ day_icon_cy - 25 }})"
-   fill="{{ c_fg }}" style="color: {{ c_fg }}">{{ d.icon_svg }}</g>
+{%- if d.icon -%}
+<g transform="translate({{ d.cx }}, {{ day_icon_cy }})
+   scale({{ day_scale }})"><use href="#{{ d.icon }}"/></g>
 {%- endif -%}
 {%- if d.temp.show -%}
 <text x="{{ d.cx }}" y="{{ y_day_temp }}" font-size="{{ font_m }}"

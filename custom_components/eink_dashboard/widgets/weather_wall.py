@@ -26,19 +26,22 @@ drawings are the same numbers.
 Three layouts:
 
 * **morning** — today's maximum as the headline, today's remaining
-  hours on the right, the next seven days below.
+  hours on the right, the following days below.
 * **evening** — tonight's minimum as the headline, tomorrow's hours
-  on the right, the seven days from the day after tomorrow below.
+  on the right, the days from the day after tomorrow below.
 * **night** — as evening, with the tonight block on a black ground.
+
+Icons are named here and drawn in the template.  The integration's
+``_build_inline_svg()`` flattens every path to a single colour, which
+would lose the yellow sun and the black rain-bearing cloud, so this
+widget does not use the shared icon loader.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Any
 
-import markupsafe
-
-from ..svg_render import _weather_svg_filter
 from ._helpers import _color_context, _widget_dim
 
 # ---------------------------------------------------------------
@@ -66,7 +69,7 @@ LEFT_X = MARGIN
 LEFT_RIGHT = 320
 HERO_CX = 72
 HERO_CY = 126
-HERO_SCALE_PX = 92  # rendered icon size
+HERO_SCALE = 3.9  # icons are drawn in a 24-unit box
 TEMP_X = 128
 Y_DATE = 44
 Y_UV_LABEL = 110
@@ -86,20 +89,19 @@ HOUR_SLOTS = 7
 HOUR_W = (RIGHT_RIGHT - RIGHT_X) / HOUR_SLOTS
 Y_HOUR_LABEL = 92
 HOUR_ICON_CY = 120
-HOUR_ICON_PX = 42
+HOUR_SCALE = 1.75
 Y_HOUR_TEMP = Y_LINE2
 BAND_BOTTOM = 242
 BAND_H = 46
 Y_CAPTION = Y_METRICS
 
-# The rule, and the seven-day strip below it.
+# The rule, and the day strip below it.
 Y_RULE = 284
 DAY_COLS = 7
 DAY_GUTTER = 12
-DAY_W = (CANVAS_W - 2 * MARGIN - (DAY_COLS - 1) * DAY_GUTTER) / DAY_COLS
 Y_DAY_LABEL = 316
-DAY_ICON_CY = 346
-DAY_ICON_PX = 50
+DAY_ICON_CY = 348
+DAY_SCALE = 2.1
 Y_DAY_TEMP = 400
 Y_DAY_PROB = 426
 Y_DAY_REMARK = 450
@@ -139,7 +141,7 @@ CLOUD_OBSCURES_MOON = 70
 CLOUD_IS_DARK = 80
 
 # Precipitation intensity bands, millimetres per hour, giving one,
-# two or three drops.
+# two or three marks.
 PRECIP_LIGHT = 0.5
 PRECIP_HEAVY = 2.0
 
@@ -155,7 +157,7 @@ _COMPASS = (
     "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
 )
 
-# HA moon phase states to the phase key used by the template.
+# HA moon phase states to the key used by the template.
 _MOON_PHASES = {
     "new_moon": "new",
     "waxing_crescent": "wax_crescent",
@@ -197,6 +199,13 @@ def _temp(value: Any) -> dict[str, object]:
         return {"show": False, "neg": False, "text": ""}
     r = round(n)
     return {"show": True, "neg": r < 0, "text": f"{abs(r)}\u00b0"}
+
+
+def _signed(t: dict[str, object]) -> str:
+    """Return a formatted temperature as a plain string with sign."""
+    if not t["show"]:
+        return ""
+    return f"{'\u2212' if t['neg'] else ''}{t['text']}"
 
 
 def _compass(bearing: Any) -> str:
@@ -254,12 +263,40 @@ def _is_dark_cloud(entry: dict[str, Any]) -> bool:
     return cover is not None and cover >= CLOUD_IS_DARK
 
 
-def _icon(condition: str, size: int) -> object:
-    """Return an inline icon for a condition, or an empty string."""
-    try:
-        return _weather_svg_filter(condition, size)
-    except (KeyError, FileNotFoundError):
-        return ""
+def _icon_name(entry: dict[str, Any], night: bool = False) -> str:
+    """Return the icon key for a forecast entry.
+
+    Args:
+        entry: A forecast entry.
+        night: True to prefer the night variant of clear or partly
+            clear skies.  The day strip always passes False, since
+            those columns describe daytime whatever the hour.
+
+    Returns:
+        A key matching a ``<g id="wx-...">`` in the template.
+    """
+    cond = str(entry.get("condition", ""))
+    drops = _drop_count(entry)
+
+    if cond in ("lightning", "lightning-rainy"):
+        return "wx-storm"
+    if cond == "fog":
+        return "wx-fog"
+    if cond in ("snowy", "snowy-rainy", "hail"):
+        return f"wx-snow{drops}" if drops else "wx-cloud-dark"
+    if drops:
+        return f"wx-rain{drops}"
+    if cond in ("rainy", "pouring"):
+        return "wx-cloud-dark"
+    if cond == "cloudy":
+        return "wx-cloud-dark" if _is_dark_cloud(entry) else "wx-cloud"
+    if cond == "partlycloudy":
+        return "wx-moon-cloud" if night else "wx-sun-cloud"
+    if cond == "clear-night":
+        return "wx-clear-night"
+    if cond in ("windy", "windy-variant"):
+        return "wx-cloud"
+    return "wx-moon-clear" if night else "wx-sun"
 
 
 def _precip_word(entries: list[dict[str, Any]]) -> str:
@@ -322,8 +359,10 @@ def _frost_warning(
         One of ``"Icy"``, ``"Severe frost"``, ``"Frost"``,
         ``"Ground frost"`` or ``""``.
     """
-    temps = [t for e in overnight if (t := _num(e.get("temperature")))
-             is not None]
+    temps = [
+        t for e in overnight
+        if (t := _num(e.get("temperature"))) is not None
+    ]
     if not temps:
         return ""
     low = min(temps)
@@ -340,10 +379,14 @@ def _frost_warning(
         return "Frost"
 
     if low <= FROST_GROUND:
-        clouds = [c for e in overnight
-                  if (c := _num(e.get("cloud_coverage"))) is not None]
-        winds = [w for e in overnight
-                 if (w := _num(e.get("wind_speed"))) is not None]
+        clouds = [
+            c for e in overnight
+            if (c := _num(e.get("cloud_coverage"))) is not None
+        ]
+        winds = [
+            w for e in overnight
+            if (w := _num(e.get("wind_speed"))) is not None
+        ]
         clear = not clouds or min(clouds) < FROST_GROUND_CLOUD
         calm = not winds or max(winds) < FROST_GROUND_WIND
         if clear and calm:
@@ -378,17 +421,13 @@ def _remarkable(day: dict[str, Any], week: list[dict[str, Any]]) -> str:
     gust = _num(day.get("wind_gust_speed"))
     s = spread("wind_gust_speed")
     if gust is not None and s and s[1] > 0 and gust >= 50:
-        candidates.append(
-            ((gust - s[0]) / s[1], f"gust {round(gust)}")
-        )
+        candidates.append(((gust - s[0]) / s[1], f"gust {round(gust)}"))
 
     low = _num(day.get("templow"))
     s = spread("templow")
     if low is not None and s and s[1] > 0:
         z = abs(low - s[0]) / s[1]
-        t = _temp(low)
-        sign = "\u2212" if t["neg"] else ""
-        candidates.append((z, f"min {sign}{t['text']}"))
+        candidates.append((z, f"min {_signed(_temp(low))}"))
 
     if not candidates:
         return ""
@@ -431,7 +470,7 @@ def _pick_hours(
 
     In the morning this is the next seven even hours from now; in the
     evening and at night it is tomorrow's seven fixed slots, so the
-    panel always frames the day the same way.
+    panel always frames the following day the same way.
     """
     parsed = []
     for e in hourly:
@@ -451,7 +490,7 @@ def _pick_hours(
                 break
         return out
 
-    tomorrow = (now + __import__("datetime").timedelta(days=1)).date()
+    tomorrow = (now + _dt.timedelta(days=1)).date()
     out = []
     for hour in EVENING_HOURS:
         for when, e in parsed:
@@ -459,19 +498,6 @@ def _pick_hours(
                 out.append(dict(e, _label=f"{hour:02d}"))
                 break
     return out
-
-
-def _column(
-    entry: dict[str, Any],
-    cx: float,
-    icon_px: int,
-) -> dict[str, object]:
-    """Build the shared parts of one forecast column."""
-    return {
-        "cx": round(cx, 1),
-        "icon_svg": _icon(str(entry.get("condition", "")), icon_px),
-        "dark": _is_dark_cloud(entry),
-    }
 
 
 def _build_weather_wall_context(
@@ -491,8 +517,6 @@ def _build_weather_wall_context(
     Returns:
         Template context dict consumed by ``weather_wall.svg.j2``.
     """
-    import datetime as _dt
-
     from homeassistant.util import dt as hass_dt
 
     x = widget.get("x", 0)
@@ -530,17 +554,17 @@ def _build_weather_wall_context(
         "font_s": FONT_S,
         "minus_xl": round(FONT_XL * MINUS_SCALE),
         "minus_m": round(FONT_M * MINUS_SCALE),
-        "minus_s": round(FONT_S * MINUS_SCALE),
         "dx_xl": round(FONT_XL * MINUS_DX),
         "dx_m": round(FONT_M * MINUS_DX),
-        "dx_s": round(FONT_S * MINUS_DX),
         "left_x": LEFT_X,
         "left_right": LEFT_RIGHT,
         "right_x": RIGHT_X,
         "right_right": RIGHT_RIGHT,
         "hero_cx": HERO_CX,
         "hero_cy": HERO_CY,
-        "hero_px": HERO_SCALE_PX,
+        "hero_scale": HERO_SCALE,
+        "hour_scale": HOUR_SCALE,
+        "day_scale": DAY_SCALE,
         "temp_x": TEMP_X,
         "y_date": Y_DATE,
         "y_uv_label": Y_UV_LABEL,
@@ -562,7 +586,7 @@ def _build_weather_wall_context(
         "y_day_temp": Y_DAY_TEMP,
         "y_day_prob": Y_DAY_PROB,
         "y_day_remark": Y_DAY_REMARK,
-        "band_bottom": BAND_BOTTOM,
+        "header_max": "",
         **_color_context(),
     }
 
@@ -585,17 +609,17 @@ def _build_weather_wall_context(
     sunrise = _local(hass_dt, sun.get("next_rising"))
     sunset_ahead = sunset is not None and sunset > now
 
+    night = state != "morning"
+
     # ---- headline --------------------------------------------
     if state == "morning":
-        hero_entry = today
         headline = _temp(today.get("temperature"))
         uv_source = today
     else:
-        hero_entry = today
         headline = _temp(today.get("templow"))
         uv_source = tomorrow
 
-    # Temperature sensor override applies only to the morning
+    # A temperature sensor override applies only to the morning
     # headline, where the number is a live reading rather than a
     # forecast maximum.
     temp_entity = widget.get("temperature_entity", "")
@@ -604,22 +628,7 @@ def _build_weather_wall_context(
         if override is not None:
             headline = _temp(override.get("state"))
 
-    # ---- the hero icon, moon or weather ----------------------
-    moon_phase = ""
-    hero_icon: object = ""
-    if state in ("evening", "night"):
-        cover = _num(today.get("cloud_coverage"))
-        obscured = cover is not None and cover >= CLOUD_OBSCURES_MOON
-        if not obscured and _drop_count(today) == 0:
-            moon_state = states.get(
-                widget.get("moon_entity", "sensor.moon_phase"), {}
-            ).get("state", "")
-            moon_phase = _MOON_PHASES.get(str(moon_state), "")
-    if not moon_phase:
-        hero_icon = _icon(
-            str(hero_entry.get("condition", "")), HERO_SCALE_PX
-        )
-
+ 
     # ---- the second line -------------------------------------
     line2_kind = ""
     line2_text = ""
@@ -627,8 +636,7 @@ def _build_weather_wall_context(
         low = _temp(today.get("templow"))
         if low["show"]:
             line2_kind = "plain"
-            line2_text = f"{'\u2212' if low['neg'] else ''}" \
-                         f"{low['text']} overnight"
+            line2_text = f"{_signed(low)} overnight"
     elif sunset_ahead and sunset and sunrise:
         line2_kind = "solar"
         line2_text = (
@@ -639,8 +647,8 @@ def _build_weather_wall_context(
         overnight = _overnight_slice(hourly, hass_dt, now)
         preceding = [
             e for e in hourly
-            if (w := _local(hass_dt, e.get("datetime"))) is not None
-            and now - _dt.timedelta(hours=6) <= w <= now
+            if (when := _local(hass_dt, e.get("datetime"))) is not None
+            and now - _dt.timedelta(hours=6) <= when <= now
         ]
         warn = _frost_warning(overnight, preceding)
         if warn:
@@ -648,33 +656,30 @@ def _build_weather_wall_context(
             line2_text = warn
 
     # ---- the bottom metrics line -----------------------------
-    wind_src = today if state == "morning" else today
-    gust = _num(wind_src.get("wind_gust_speed"))
-    speed = _num(wind_src.get("wind_speed"))
+    gust = _num(today.get("wind_gust_speed"))
+    speed = _num(today.get("wind_speed"))
     unit = attrs.get("wind_speed_unit", "km/h")
+    bearing = _compass(today.get("wind_bearing"))
     if speed is not None and gust is not None:
-        wind_text = (
-            f"{_compass(wind_src.get('wind_bearing'))} "
-            f"{round(speed)}\u2013{round(gust)} {unit}"
-        )
+        wind_text = f"{bearing} {round(speed)}\u2013{round(gust)} {unit}"
     elif speed is not None:
-        wind_text = (
-            f"{_compass(wind_src.get('wind_bearing'))} "
-            f"{round(speed)} {unit}"
-        )
+        wind_text = f"{bearing} {round(speed)} {unit}"
     else:
         wind_text = ""
 
     if state == "morning":
         solar_text = sunset.strftime("%H:%M") if sunset else ""
     elif line2_kind == "solar":
+        # Both times are already on the line above.
         solar_text = ""
     else:
         solar_text = sunrise.strftime("%H:%M") if sunrise else ""
 
     # ---- ultraviolet -----------------------------------------
-    hide_below = _num(widget.get("uv_hide_below")) or UV_HIDE_BELOW
-    warn_above = _num(widget.get("uv_warn_above")) or UV_WARN_ABOVE
+    hide_below = _num(widget.get("uv_hide_below"))
+    hide_below = UV_HIDE_BELOW if hide_below is None else hide_below
+    warn_above = _num(widget.get("uv_warn_above"))
+    warn_above = UV_WARN_ABOVE if warn_above is None else warn_above
     uv = _num(uv_source.get("uv_index"))
     uv_show = uv is not None and uv >= hide_below
     uv_warn = uv is not None and uv > warn_above
@@ -683,9 +688,9 @@ def _build_weather_wall_context(
     hours_raw = _pick_hours(hourly, hass_dt, now, state)
     hours = []
     for i, e in enumerate(hours_raw):
-        cx = RIGHT_X + HOUR_W * (i + 0.5)
         hours.append({
-            **_column(e, cx, HOUR_ICON_PX),
+            "cx": round(RIGHT_X + HOUR_W * (i + 0.5), 1),
+            "icon": _icon_name(e, night and int(e.get("_label", "12")) < 7),
             "label": e.get("_label", ""),
             "temp": _temp(e.get("temperature")),
         })
@@ -695,9 +700,32 @@ def _build_weather_wall_context(
         p for e in hours_raw
         if (p := _num(e.get("precipitation_probability"))) is not None
     ]
-    rain_peak = f" {round(max(peaks))}%" if peaks else ""
+    rain_peak = f"{round(max(peaks))}%" if peaks else ""
 
-    # ---- the seven-day strip ---------------------------------
+   # ---- the hero icon, moon or weather ----------------------
+    moon_phase = ""
+    hero_icon = ""
+    if night:
+        cover = _num(today.get("cloud_coverage"))
+        obscured = cover is not None and cover >= CLOUD_OBSCURES_MOON
+        if not obscured and _drop_count(today) == 0:
+            moon_state = states.get(
+                widget.get("moon_entity", "sensor.moon_phase"), {}
+            ).get("state", "")
+            moon_phase = _MOON_PHASES.get(str(moon_state), "")
+    if not moon_phase:
+        # The daily entry covers the whole day including hours
+        # already past, so in the morning state the hero is derived
+        # from the hours still to come.  Otherwise a shower at
+        # breakfast still hangs a drop under the icon at teatime.
+        if state == "morning" and hours_raw:
+            worst = max(hours_raw, key=_drop_count)
+            hero_icon = _icon_name(worst, False)
+        else:
+            hero_icon = _icon_name(today, night)
+
+
+    # ---- the day strip ---------------------------------------
     try:
         want = max(3, min(DAY_COLS, int(widget.get("forecast_days", 7))))
     except (TypeError, ValueError):
@@ -710,43 +738,34 @@ def _build_weather_wall_context(
     # rather than by the requested count, or the last column sits in
     # a gap and reads as missing data.
     n_days = max(1, len(week))
-    day_w = (
-        CANVAS_W - 2 * MARGIN - (n_days - 1) * DAY_GUTTER
-    ) / n_days
+    day_w = (CANVAS_W - 2 * MARGIN - (n_days - 1) * DAY_GUTTER) / n_days
     days = []
     for i, e in enumerate(week):
-        cx = MARGIN + (day_w + DAY_GUTTER) * i + day_w / 2
-        when = _local(hass_dt, e.get("datetime"))
         when = _local(hass_dt, e.get("datetime"))
         prob = _num(e.get("precipitation_probability"))
         days.append({
-            **_column(e, cx, DAY_ICON_PX),
+            "cx": round(MARGIN + (day_w + DAY_GUTTER) * i + day_w / 2, 1),
+            # The day strip always describes daytime, whatever the
+            # hour the panel is rendered at, so never the night icon.
+            "icon": _icon_name(e, False),
             "label": when.strftime("%a") if when else "",
             "temp": _temp(e.get("temperature")),
             "prob": (
-                f"{round(prob)}%" if prob is not None and prob >= PROB_MIN
+                f"{round(prob)}%"
+                if prob is not None and prob >= PROB_MIN
                 else ""
             ),
             "remark": _remarkable(e, week),
         })
 
-    if state == "morning":
-        date_text = now.strftime("%A %-d %B")
-        header_left = ""
-    else:
-        when = _local(hass_dt, tomorrow.get("datetime"))
-        date_text = now.strftime("%A %-d %B")
+    if state != "morning":
         hi = _temp(tomorrow.get("temperature"))
-        header_left = "Tomorrow"
-        base["header_max"] = (
-            f"max {'\u2212' if hi['neg'] else ''}{hi['text']}"
-            if hi["show"] else ""
-        )
+        base["header_max"] = f"max {_signed(hi)}" if hi["show"] else ""
 
     return {
         **base,
         "has_state": True,
-        "date_text": date_text,
+        "date_text": now.strftime("%A %-d %B"),
         "hero_icon": hero_icon,
         "moon_phase": moon_phase,
         "headline": headline,
@@ -757,7 +776,7 @@ def _build_weather_wall_context(
         "uv_show": uv_show,
         "uv_warn": uv_warn,
         "uv_text": f"{round(uv)}" if uv is not None else "",
-        "header_left": header_left,
+        "header_left": "" if state == "morning" else "Tomorrow",
         "header_uv": (
             f"UV {round(uv)}" if uv_show and state != "morning" else ""
         ),
