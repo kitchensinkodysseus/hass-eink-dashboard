@@ -468,7 +468,7 @@ from .widgets import (  # noqa: E402
     _build_tile_context,
     _build_waste_schedule_context,
     _build_weather_context,
-    _build_weather_context,
+    _build_weather_wall_context,
 )
 
 _SVG_RENDERERS: dict[str, SvgContextFn] = {
