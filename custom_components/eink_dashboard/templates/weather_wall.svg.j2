@@ -1,0 +1,23 @@
+{#- Weather wall: full-panel layout for a colour e-ink display. -#}
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="{{ w }}" height="{{ h }}">
+<rect x="0" y="0" width="{{ w }}" height="{{ h }}" fill="#0000FF"/>
+{%- if state == "night" -%}
+<rect x="0" y="0" width="370" height="284" fill="#000000"/>
+{%- endif -%}
+<text x="28" y="60" font-size="40" font-weight="500"
+      fill="#FFFFFF" font-family="Fira Sans, sans-serif"
+  >weather_wall</text>
+<text x="28" y="100" font-size="20"
+      fill="#FFFFFF" font-family="Fira Sans, sans-serif"
+  >state: {{ state }} · {{ w }} × {{ h }} · {{ stamp }}</text>
+{%- if has_state -%}
+<text x="28" y="132" font-size="20"
+      fill="#FFFFFF" font-family="Fira Sans, sans-serif"
+  >{{ entity_id }}</text>
+{%- else -%}
+<text x="28" y="132" font-size="20"
+      fill="#FFFF00" font-family="Fira Sans, sans-serif"
+  >no weather entity selected</text>
+{%- endif -%}
+</svg>
