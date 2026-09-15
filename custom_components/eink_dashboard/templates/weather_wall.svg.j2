@@ -1,23 +1,206 @@
-{#- Weather wall: full-panel layout for a colour e-ink display. -#}
+{#- Weather wall: a full-panel layout for a six-colour e-ink
+    display.  All geometry arrives pre-computed from
+    _build_weather_wall_context(); this template only draws.
+
+    The palette is the panel's four usable native states: blue
+    ground, white, black and yellow.  Nothing here dithers. -#}
+{%- set c_bg = "#0000FF" -%}
+{%- set c_fg = "#FFFFFF" -%}
+{%- set c_dark = "#000000" -%}
+{%- set c_warn = "#FF0000" -%}
+{%- set c_sun = "#FFFF00" -%}
 <svg xmlns="http://www.w3.org/2000/svg"
      width="{{ w }}" height="{{ h }}">
-<rect x="0" y="0" width="{{ w }}" height="{{ h }}" fill="#0000FF"/>
-{%- if state == "night" -%}
-<rect x="0" y="0" width="370" height="284" fill="#000000"/>
+<defs>
+<g id="ww-wind">
+  <path d="M -8 -3 h 9 a 3 3 0 1 0 -3 -3" fill="none"
+        stroke="{{ c_fg }}" stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M -8 1 h 12 a 3 3 0 1 1 -3 3" fill="none"
+        stroke="{{ c_fg }}" stroke-width="1.5"
+        stroke-linecap="round"/>
+</g>
+<g id="ww-horizon">
+  <path d="M -6.5 3 A 6.5 6.5 0 0 1 6.5 3 Z" fill="{{ c_sun }}"/>
+  <line x1="-9.5" y1="3.5" x2="9.5" y2="3.5"
+        stroke="{{ c_fg }}" stroke-width="1.5"/>
+  <line x1="0" y1="-6" x2="0" y2="-8.6"
+        stroke="{{ c_sun }}" stroke-width="1.5"/>
+  <line x1="-5.7" y1="-2.7" x2="-7.5" y2="-4.5"
+        stroke="{{ c_sun }}" stroke-width="1.5"/>
+  <line x1="5.7" y1="-2.7" x2="7.5" y2="-4.5"
+        stroke="{{ c_sun }}" stroke-width="1.5"/>
+</g>
+<g id="ww-arm" fill="none">
+  <line x1="0" y1="0" x2="0" y2="-7.5"/>
+  <line x1="0" y1="-4.3" x2="2.3" y2="-5.9"/>
+  <line x1="0" y1="-4.3" x2="-2.3" y2="-5.9"/>
+</g>
+<g id="ww-crystal" stroke="{{ c_fg }}" stroke-width="1.4"
+   stroke-linecap="butt">
+  <use href="#ww-arm"/>
+  <use href="#ww-arm" transform="rotate(60)"/>
+  <use href="#ww-arm" transform="rotate(120)"/>
+  <use href="#ww-arm" transform="rotate(180)"/>
+  <use href="#ww-arm" transform="rotate(240)"/>
+  <use href="#ww-arm" transform="rotate(300)"/>
+</g>
+{#- Moon phases.  The lit limb is on the right when waxing, as
+    seen from the northern hemisphere; the waning phases are the
+    same paths mirrored. -#}
+<g id="m-new"><circle cx="0" cy="0" r="9" fill="none"
+   stroke="{{ c_fg }}" stroke-width="1.3"/></g>
+<g id="m-crescent"><path d="M 0 -9 A 9 9 0 0 1 0 9 A 4 9 0 0 0 0 -9 Z"
+   fill="{{ c_fg }}"/></g>
+<g id="m-quarter"><path d="M 0 -9 A 9 9 0 0 1 0 9 Z"
+   fill="{{ c_fg }}"/></g>
+<g id="m-gibbous"><path d="M 0 -9 A 9 9 0 0 1 0 9 A 4 9 0 0 1 0 -9 Z"
+   fill="{{ c_fg }}"/></g>
+<g id="m-full"><circle cx="0" cy="0" r="9" fill="{{ c_fg }}"/></g>
+</defs>
+<rect x="0" y="0" width="{{ w }}" height="{{ h }}" fill="{{ c_bg }}"/>
+{%- if is_night -%}
+<rect x="0" y="0" width="{{ night_w }}" height="{{ night_h }}"
+      fill="{{ c_dark }}"/>
 {%- endif -%}
-<text x="28" y="60" font-size="40" font-weight="500"
-      fill="#FFFFFF" font-family="Fira Sans, sans-serif"
-  >weather_wall</text>
-<text x="28" y="100" font-size="20"
-      fill="#FFFFFF" font-family="Fira Sans, sans-serif"
-  >state: {{ state }} · {{ w }} × {{ h }} · {{ stamp }}</text>
-{%- if has_state -%}
-<text x="28" y="132" font-size="20"
-      fill="#FFFFFF" font-family="Fira Sans, sans-serif"
-  >{{ entity_id }}</text>
+{%- if not has_state -%}
+<text x="{{ margin }}" y="{{ y_headline }}" font-size="{{ font_m }}"
+      fill="{{ c_sun }}" font-family="Roboto"
+  >No weather entity, or no forecast available</text>
 {%- else -%}
-<text x="28" y="132" font-size="20"
-      fill="#FFFF00" font-family="Fira Sans, sans-serif"
-  >no weather entity selected</text>
+<text x="{{ margin }}" y="{{ y_date }}" font-size="{{ font_s }}"
+      fill="{{ c_fg }}" font-family="Roboto">{{ date_text }}</text>
+{%- if header_left -%}
+<text x="{{ hours[0].cx if hours else right_x }}" y="{{ y_date }}"
+      font-size="{{ font_s }}" fill="{{ c_fg }}"
+      font-family="Roboto">{{ header_left }}</text>
+{%- endif -%}
+{%- if header_max is defined and header_max -%}
+<text x="{{ right_right - 132 }}" y="{{ y_date }}"
+      font-size="{{ font_s }}" text-anchor="end" fill="{{ c_fg }}"
+      font-family="Roboto">{{ header_max }}</text>
+{%- endif -%}
+{%- if header_uv -%}
+<text x="{{ right_right }}" y="{{ y_date }}" font-size="{{ font_s }}"
+      text-anchor="end" fill="{{ c_fg }}"
+      font-family="Roboto">{{ header_uv }}</text>
+{%- endif -%}
+{#- The hero: a moon phase when the sky is clear enough to see
+    one, otherwise the weather condition. -#}
+{%- if moon_phase -%}
+<g transform="translate({{ hero_cx }}, {{ hero_cy }})
+   scale({{ (hero_px / 18.0)|round(3) }}
+   {%- if moon_phase.startswith('wane') %}, {{ (hero_px / 18.0)|round(3) }}{% endif %})">
+{%- if moon_phase == 'new' -%}<use href="#m-new"/>
+{%- elif moon_phase in ('wax_crescent', 'wane_crescent') -%}
+<g{% if moon_phase.startswith('wane') %} transform="scale(-1,1)"{% endif %}><use href="#m-crescent"/></g>
+{%- elif moon_phase in ('first_quarter', 'last_quarter') -%}
+<g{% if moon_phase == 'last_quarter' %} transform="scale(-1,1)"{% endif %}><use href="#m-quarter"/></g>
+{%- elif moon_phase in ('wax_gibbous', 'wane_gibbous') -%}
+<g{% if moon_phase.startswith('wane') %} transform="scale(-1,1)"{% endif %}><use href="#m-gibbous"/></g>
+{%- else -%}<use href="#m-full"/>
+{%- endif -%}
+</g>
+{%- elif hero_icon -%}
+<g transform="translate({{ hero_cx - hero_px // 2 }},
+   {{ hero_cy - hero_px // 2 }})"
+   fill="{{ c_fg }}" style="color: {{ c_fg }}">{{ hero_icon }}</g>
+{%- endif -%}
+{%- if headline.show -%}
+<text x="{{ temp_x }}" y="{{ y_headline }}" font-size="{{ font_xl }}"
+      font-weight="500" fill="{{ c_fg }}" font-family="Roboto"
+  >{%- if headline.neg %}<tspan font-size="{{ minus_xl }}">&#8722;</tspan><tspan dx="{{ dx_xl }}">{{ headline.text }}</tspan>{% else %}{{ headline.text }}{% endif -%}</text>
+{%- endif -%}
+{%- if uv_show -%}
+<text x="{{ left_right }}" y="{{ y_uv_label }}" font-size="{{ font_s }}"
+      font-weight="600" text-anchor="end"
+      fill="{{ c_warn if uv_warn else c_fg }}"
+      font-family="Roboto">UV</text>
+<text x="{{ left_right }}" y="{{ y_headline }}" font-size="{{ font_l }}"
+      font-weight="600" text-anchor="end"
+      fill="{{ c_warn if uv_warn else c_fg }}"
+      font-family="Roboto">{{ uv_text }}</text>
+{%- endif -%}
+{%- if line2_kind == 'plain' -%}
+<text x="{{ temp_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"
+      fill="{{ c_fg }}" font-family="Roboto">{{ line2_text }}</text>
+{%- elif line2_kind == 'solar' -%}
+<g transform="translate({{ line2_icon_x }}, {{ y_line2 - 9 }})
+   scale(1.5)"><use href="#ww-horizon"/></g>
+<text x="{{ line2_text_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"
+      fill="{{ c_fg }}" font-family="Roboto">{{ line2_text }}</text>
+{%- elif line2_kind == 'warn' -%}
+<g transform="translate({{ line2_icon_x }}, {{ y_line2 - 9 }})
+   scale(1.5)"><use href="#ww-crystal"/></g>
+<text x="{{ line2_text_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"
+      fill="{{ c_fg }}" font-family="Roboto">{{ line2_text }}</text>
+{%- endif -%}
+{%- if wind_text -%}
+<g transform="translate({{ wind_icon_x }}, {{ y_metrics - 6 }})
+   scale(1.15)"><use href="#ww-wind"/></g>
+<text x="{{ wind_text_x }}" y="{{ y_metrics }}" font-size="{{ font_s }}"
+      fill="{{ c_fg }}" font-family="Roboto">{{ wind_text }}</text>
+{%- endif -%}
+{%- if solar_text -%}
+<g transform="translate({{ solar_icon_x }}, {{ y_metrics - 7 }})
+   scale(1.15)"><use href="#ww-horizon"/></g>
+<text x="{{ left_right }}" y="{{ y_metrics }}" font-size="{{ font_s }}"
+      text-anchor="end" fill="{{ c_fg }}"
+      font-family="Roboto">{{ solar_text }}</text>
+{%- endif -%}
+{#- The two-hourly strip. -#}
+{%- for hr in hours -%}
+<text x="{{ hr.cx }}" y="{{ y_hour_label }}" font-size="{{ font_s }}"
+      text-anchor="middle" fill="{{ c_fg }}"
+      font-family="Roboto">{{ hr.label }}</text>
+{%- if hr.icon_svg -%}
+<g transform="translate({{ hr.cx - 21 }}, {{ hour_icon_cy - 21 }})"
+   fill="{{ c_fg }}" style="color: {{ c_fg }}">{{ hr.icon_svg }}</g>
+{%- endif -%}
+{%- if hr.temp.show -%}
+<text x="{{ hr.cx }}" y="{{ y_hour_temp }}" font-size="{{ font_m }}"
+      font-weight="500" text-anchor="middle" fill="{{ c_fg }}"
+      font-family="Roboto"
+  >{%- if hr.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ hr.temp.text }}</tspan>{% else %}{{ hr.temp.text }}{% endif -%}</text>
+{%- endif -%}
+{%- endfor -%}
+{%- if rain_d -%}
+<path d="{{ rain_d }}" fill="{{ c_fg }}"/>
+<line x1="{{ right_x }}" y1="{{ rain_mid }}"
+      x2="{{ right_right }}" y2="{{ rain_mid }}"
+      stroke="{{ c_fg }}" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="{{ right_x }}" y="{{ y_caption }}" font-size="{{ font_s }}"
+      fill="{{ c_fg }}" font-family="Roboto">{{ caption }}</text>
+<text x="{{ right_right }}" y="{{ y_caption }}" font-size="{{ font_s }}"
+      text-anchor="end" fill="{{ c_fg }}" font-family="Roboto">50%</text>
+{%- endif -%}
+<line x1="{{ margin }}" y1="{{ y_rule }}" x2="{{ w - margin }}"
+      y2="{{ y_rule }}" stroke="{{ c_fg }}" stroke-width="1.5"/>
+{#- The seven-day strip. -#}
+{%- for d in days -%}
+<text x="{{ d.cx }}" y="{{ y_day_label }}" font-size="{{ font_s }}"
+      text-anchor="middle" fill="{{ c_fg }}"
+      font-family="Roboto">{{ d.label }}</text>
+{%- if d.icon_svg -%}
+<g transform="translate({{ d.cx - 25 }}, {{ day_icon_cy - 25 }})"
+   fill="{{ c_fg }}" style="color: {{ c_fg }}">{{ d.icon_svg }}</g>
+{%- endif -%}
+{%- if d.temp.show -%}
+<text x="{{ d.cx }}" y="{{ y_day_temp }}" font-size="{{ font_m }}"
+      font-weight="500" text-anchor="middle" fill="{{ c_fg }}"
+      font-family="Roboto"
+  >{%- if d.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ d.temp.text }}</tspan>{% else %}{{ d.temp.text }}{% endif -%}</text>
+{%- endif -%}
+{%- if d.prob -%}
+<text x="{{ d.cx }}" y="{{ y_day_prob }}" font-size="{{ font_s }}"
+      text-anchor="middle" fill="{{ c_fg }}"
+      font-family="Roboto">{{ d.prob }}</text>
+{%- endif -%}
+{%- if d.remark -%}
+<text x="{{ d.cx }}" y="{{ y_day_remark }}" font-size="{{ font_s }}"
+      text-anchor="middle" fill="{{ c_fg }}"
+      font-family="Roboto">{{ d.remark }}</text>
+{%- endif -%}
+{%- endfor -%}
 {%- endif -%}
 </svg>

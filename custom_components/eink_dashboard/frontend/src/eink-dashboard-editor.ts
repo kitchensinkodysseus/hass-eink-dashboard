@@ -803,6 +803,21 @@ export const SCHEMAS: Record<
             number: { min: 0, max: 11, step: 0.5, mode: "box" },
           },
         },
+        {
+          name: "force_state",
+          default: "auto",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "auto", label: "Automatic" },
+                { value: "morning", label: "Morning" },
+                { value: "evening", label: "Evening" },
+                { value: "night", label: "Night" },
+              ],
+            },
+          },
+        },
       ],
     },
     {
@@ -1755,6 +1770,7 @@ export const LABELS: Record<string, string> = {
   moon_entity: "Moon phase sensor",
   uv_hide_below: "Hide UV below",
   uv_warn_above: "Warn on UV above",
+  force_state: "Force layout (preview)",
 };
 
 // ── HA component loader ──────────────────────────────────────────
