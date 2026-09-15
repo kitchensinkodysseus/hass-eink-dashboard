@@ -100,6 +100,21 @@ export const WIDGET_TYPES: Record<string, WidgetTypeMeta> = {
       card_style: DEFAULT_CARD_STYLE,
     },
   },
+  weather_wall: {
+    label: "Weather Wall",
+    description: "Full-panel forecast for a wall display",
+    icon: "mdi:weather-partly-cloudy",
+    defaults: {
+      type: "weather_wall",
+      entity: "",
+      x: 0,
+      y: 0,
+      w: 800,
+      h: 480,
+      forecast_days: 7,
+      moon_entity: "sensor.moon_phase",
+    },
+  },
   entities: {
     label: "Entities",
     description: "Multi-entity list with icons and state values",
@@ -736,6 +751,67 @@ export const SCHEMAS: Record<
       title: "Appearance",
       icon: "mdi:palette",
       schema: [fontSizeSelector(FONT_SIZE_WEATHER), cardStyleSelector()],
+    },
+  ],
+
+  weather_wall: (d) => [
+    identitySection(),
+    {
+      name: "content",
+      type: "expandable",
+      flatten: true,
+      expanded: true,
+      title: "Content",
+      icon: "mdi:weather-partly-cloudy",
+      schema: [
+        {
+          name: "entity",
+          required: true,
+          selector: { entity: { domain: "weather" } },
+        },
+        {
+          name: "forecast_days",
+          default: 7,
+          selector: { number: { min: 3, max: 7, mode: "box" } },
+        },
+        {
+          name: "moon_entity",
+          selector: { entity: { domain: "sensor" } },
+        },
+        {
+          name: "temperature_entity",
+          selector: { entity: { domain: "sensor" } },
+        },
+      ],
+    },
+    {
+      name: "behaviour",
+      type: "expandable",
+      flatten: true,
+      title: "Behaviour",
+      icon: "mdi:clock-outline",
+      schema: [
+        {
+          name: "uv_hide_below",
+          default: 4,
+          selector: { number: { min: 0, max: 11, mode: "box" } },
+        },
+        {
+          name: "uv_warn_above",
+          default: 5.5,
+          selector: {
+            number: { min: 0, max: 11, step: 0.5, mode: "box" },
+          },
+        },
+      ],
+    },
+    {
+      name: "layout",
+      type: "expandable",
+      flatten: true,
+      title: "Layout",
+      icon: "mdi:move-resize",
+      schema: [{ type: "grid", name: "", schema: posXYWH(d) }],
     },
   ],
 
@@ -1676,6 +1752,9 @@ export const LABELS: Record<string, string> = {
   entity_3: "Third entity",
   name_3: "Third entity name",
   y_axis_3: "Third entity Y axis",
+  moon_entity: "Moon phase sensor",
+  uv_hide_below: "Hide UV below",
+  uv_warn_above: "Warn on UV above",
 };
 
 // ── HA component loader ──────────────────────────────────────────
@@ -1718,8 +1797,9 @@ export function getSummary(widget: Widget): string {
     return s.length > 30 ? s.slice(0, 30) + "…" : (s || "(empty)");
   }
   if (
-    t === "weather" || t === "tile" || t === "entity"
-    || t === "sensor" || t === "calendar" || t === "gauge"
+    t === "weather" || t === "weather_wall" || t === "tile"
+    || t === "entity" || t === "sensor" || t === "calendar"
+    || t === "gauge"
   ) {
     return widget.entity || "(no entity)";
   }

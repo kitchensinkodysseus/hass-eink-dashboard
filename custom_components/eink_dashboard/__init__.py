@@ -370,11 +370,58 @@ async def _enrich_entity_icons(
             states[entity_id]["attributes"]["icon"] = icon
 
 
+_FORECAST_TYPES: dict[str, tuple[str, ...]] = {
+    WidgetType.WEATHER: ("daily",),
+    WidgetType.WEATHER_WALL: ("daily", "hourly"),
+}
+"""Forecast types to fetch per widget type.  Hourly is written to
+``attributes["forecast_hourly"]`` so it does not collide with the
+daily list the stock weather widget reads."""
+
+
 async def _fetch_forecasts(
     hass: HomeAssistant,
     widgets: list[dict[str, Any]],
     states: dict[str, Any],
 ) -> None:
+    """Fetch forecasts for weather widgets and inject into states."""
+    wanted: dict[str, set[str]] = {}
+    for w in widgets:
+        types = _FORECAST_TYPES.get(w.get("type", ""))
+        if not types:
+            continue
+        eid = w.get("entity", "")
+        if eid and eid in states:
+            wanted.setdefault(eid, set()).update(types)
+
+    for entity_id, types in wanted.items():
+        for ftype in sorted(types):
+            try:
+                result = await hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": entity_id, "type": ftype},
+                    blocking=True,
+                    return_response=True,
+                )
+                if result is None:
+                    continue
+                entity_data = result.get(entity_id)
+                forecast = (
+                    entity_data.get("forecast")
+                    if isinstance(entity_data, dict)
+                    else None
+                ) or []
+                key = (
+                    "forecast"
+                    if ftype == "daily"
+                    else f"forecast_{ftype}"
+                )
+                states[entity_id]["attributes"][key] = forecast
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Could not fetch %s forecast for %s", ftype, entity_id
+                )
     """Fetch daily forecasts for weather widgets and inject into states.
 
     Calls the ``weather.get_forecasts`` service for each unique

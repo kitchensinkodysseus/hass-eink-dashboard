@@ -435,6 +435,18 @@ export interface WeatherWidget extends WidgetBase {
   card_style?: CardStyle;
 }
 
+/** Full-panel weather layout for a wall-mounted e-ink display. */
+export interface WeatherWallWidget extends WidgetBase {
+  type: "weather_wall";
+  entity?: string;
+  forecast_days?: number;
+  moon_entity?: string;
+  temperature_entity?: string;
+  uv_hide_below?: number;
+  uv_warn_above?: number;
+  force_state?: "auto" | "morning" | "evening" | "night";
+}
+
 /** Device battery level indicator in icon or chip layout. */
 export interface DeviceBatteryWidget extends WidgetBase {
   type: "device_battery";
@@ -1217,6 +1229,7 @@ export type Widget =
   | FrameWidget
   | SeparatorWidget
   | WeatherWidget
+  | WeatherWallWidget
   | DeviceBatteryWidget
   | WasteScheduleWidget
   | CalendarWidget

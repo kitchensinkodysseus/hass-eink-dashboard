@@ -313,3 +313,4 @@ class WidgetType(StrEnum):
     DEVICE_BATTERY = "device_battery"
     WASTE_SCHEDULE = "waste_schedule"
     CALENDAR = "calendar"
+    WEATHER_WALL = "weather_wall"
