@@ -69,7 +69,7 @@ LEFT_X = MARGIN
 LEFT_RIGHT = 320
 HERO_CX = 72
 HERO_CY = 126
-HERO_SCALE = 3.9  # icons are drawn in a 24-unit box
+HERO_SCALE = 3.51  # icons are drawn in a 24-unit box
 TEMP_X = 128
 Y_DATE = 44
 Y_UV_LABEL = 110
@@ -89,7 +89,7 @@ HOUR_SLOTS = 7
 HOUR_W = (RIGHT_RIGHT - RIGHT_X) / HOUR_SLOTS
 Y_HOUR_LABEL = 92
 HOUR_ICON_CY = 120
-HOUR_SCALE = 1.75
+HOUR_SCALE = 1.58
 Y_HOUR_TEMP = Y_LINE2
 BAND_BOTTOM = 242
 BAND_H = 46
@@ -101,13 +101,13 @@ DAY_COLS = 7
 DAY_GUTTER = 12
 Y_DAY_LABEL = 316
 DAY_ICON_CY = 348
-DAY_SCALE = 2.1
+DAY_SCALE = 1.89
 Y_DAY_TEMP = 400
 Y_DAY_PROB = 426
 Y_DAY_REMARK = 450
 
 # Night block.
-NIGHT_W = RIGHT_X
+NIGHT_W = 358
 NIGHT_H = Y_RULE
 
 # ---------------------------------------------------------------
@@ -688,9 +688,17 @@ def _build_weather_wall_context(
     hours_raw = _pick_hours(hourly, hass_dt, now, state)
     hours = []
     for i, e in enumerate(hours_raw):
+        when = _local(hass_dt, e.get("datetime"))
+        # An hour is dark when it falls between sunset and the
+        # following sunrise.  sun.sun gives the next of each, so
+        # for hours beyond tomorrow's sunrise this is approximate;
+        # good enough for a two-hourly strip.
+        dark = False
+        if when is not None and sunset is not None and sunrise is not None:
+            dark = when >= sunset or when < sunrise
         hours.append({
             "cx": round(RIGHT_X + HOUR_W * (i + 0.5), 1),
-            "icon": _icon_name(e, night and int(e.get("_label", "12")) < 7),
+            "icon": _icon_name(e, dark),
             "label": e.get("_label", ""),
             "temp": _temp(e.get("temperature")),
         })
