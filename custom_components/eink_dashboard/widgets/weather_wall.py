@@ -691,6 +691,11 @@ def _build_weather_wall_context(
         })
     rain_d, rain_mid = _rain_path(hours_raw)
     caption = f"Chance of {_precip_word(hours_raw)}"
+    peaks = [
+        p for e in hours_raw
+        if (p := _num(e.get("precipitation_probability"))) is not None
+    ]
+    rain_peak = f" {round(max(peaks))}%" if peaks else ""
 
     # ---- the seven-day strip ---------------------------------
     try:
@@ -699,9 +704,19 @@ def _build_weather_wall_context(
         want = DAY_COLS
     first = 1 if state == "morning" else 2
     week = daily[first:first + want]
+    # The provider gives a fixed number of days, so the strip is
+    # shorter in the evening, where tomorrow has already been spent
+    # on the top right.  Divide the width by what actually arrived
+    # rather than by the requested count, or the last column sits in
+    # a gap and reads as missing data.
+    n_days = max(1, len(week))
+    day_w = (
+        CANVAS_W - 2 * MARGIN - (n_days - 1) * DAY_GUTTER
+    ) / n_days
     days = []
     for i, e in enumerate(week):
-        cx = MARGIN + (DAY_W + DAY_GUTTER) * i + DAY_W / 2
+        cx = MARGIN + (day_w + DAY_GUTTER) * i + day_w / 2
+        when = _local(hass_dt, e.get("datetime"))
         when = _local(hass_dt, e.get("datetime"))
         prob = _num(e.get("precipitation_probability"))
         days.append({
@@ -749,6 +764,7 @@ def _build_weather_wall_context(
         "hours": hours,
         "rain_d": rain_d,
         "rain_mid": round(rain_mid, 1),
+        "rain_peak": rain_peak,
         "caption": caption,
         "days": days,
     }

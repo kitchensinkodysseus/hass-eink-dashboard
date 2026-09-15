@@ -171,8 +171,11 @@
       stroke="{{ c_fg }}" stroke-width="1" stroke-dasharray="4 4"/>
 <text x="{{ right_x }}" y="{{ y_caption }}" font-size="{{ font_s }}"
       fill="{{ c_fg }}" font-family="Roboto">{{ caption }}</text>
+{%- if rain_peak -%}
 <text x="{{ right_right }}" y="{{ y_caption }}" font-size="{{ font_s }}"
-      text-anchor="end" fill="{{ c_fg }}" font-family="Roboto">50%</text>
+      text-anchor="end" fill="{{ c_fg }}"
+      font-family="Roboto">{{ rain_peak }}</text>
+{%- endif -%}
 {%- endif -%}
 <line x1="{{ margin }}" y1="{{ y_rule }}" x2="{{ w - margin }}"
       y2="{{ y_rule }}" stroke="{{ c_fg }}" stroke-width="1.5"/>
