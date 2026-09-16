@@ -310,14 +310,27 @@
   >{%- if headline.neg %}<tspan font-size="{{ minus_xl }}">&#8722;</tspan><tspan dx="{{ dx_xl }}">{{ headline.text }}</tspan>{% else %}{{ headline.text }}{% endif -%}</text>
 {%- endif -%}
 {%- if uv_show -%}
+{%- if uv_warn -%}
+{#- A high index gets a filled badge rather than red type: red on
+    blue has too little luminance separation on the panel, whereas
+    white on red is the strongest pairing either colour has. -#}
+<rect x="{{ left_right - uv_badge_w }}" y="{{ y_uv_badge }}"
+      width="{{ uv_badge_w }}" height="{{ uv_badge_h }}"
+      rx="10" ry="10" fill="{{ c_warn }}"/>
+<text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_uv_label }}"
+      font-size="{{ font_s }}" font-weight="600" text-anchor="middle"
+      fill="{{ c_fg }}" font-family="Roboto">UV</text>
+<text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_headline }}"
+      font-size="{{ font_l }}" font-weight="600" text-anchor="middle"
+      fill="{{ c_fg }}" font-family="Roboto">{{ uv_text }}</text>
+{%- else -%}
 <text x="{{ left_right }}" y="{{ y_uv_label }}" font-size="{{ font_s }}"
-      font-weight="600" text-anchor="end"
-      fill="{{ c_warn if uv_warn else c_fg }}"
+      font-weight="600" text-anchor="end" fill="{{ c_fg }}"
       font-family="Roboto">UV</text>
 <text x="{{ left_right }}" y="{{ y_headline }}" font-size="{{ font_l }}"
-      font-weight="600" text-anchor="end"
-      fill="{{ c_warn if uv_warn else c_fg }}"
+      font-weight="600" text-anchor="end" fill="{{ c_fg }}"
       font-family="Roboto">{{ uv_text }}</text>
+{%- endif -%}
 {%- endif -%}
 {%- if line2_kind == 'plain' -%}
 <text x="{{ temp_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"

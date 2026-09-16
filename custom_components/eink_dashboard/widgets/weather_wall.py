@@ -73,6 +73,9 @@ HERO_SCALE = 3.51  # icons are drawn in a 24-unit box
 TEMP_X = 128
 Y_DATE = 44
 Y_UV_LABEL = 110
+UV_BADGE_W = 56
+UV_BADGE_H = 80
+Y_UV_BADGE = 88
 Y_HEADLINE = 154  # shared by the headline and the UV figure
 Y_LINE2 = 190  # shared with the hourly temperatures
 Y_METRICS = 264  # shared with the rain caption
@@ -530,11 +533,13 @@ def _build_weather_wall_context(
 
     now = hass_dt.now()
 
+    # Provisional layout, decided on the clock alone.  This has to
+    # happen before `base` is built, because `base` carries it into
+    # the template and into the early returns below.  It is refined
+    # once the states snapshot is available, further down.
     forced = widget.get("force_state", "auto")
     if forced in ("morning", "evening", "night"):
         state = forced
-    elif now.hour >= NIGHT_FROM:
-        state = "night"
     elif now.hour >= EVENING_FROM:
         state = "evening"
     else:
@@ -568,6 +573,9 @@ def _build_weather_wall_context(
         "temp_x": TEMP_X,
         "y_date": Y_DATE,
         "y_uv_label": Y_UV_LABEL,
+        "uv_badge_w": UV_BADGE_W,
+        "uv_badge_h": UV_BADGE_H,
+        "y_uv_badge": Y_UV_BADGE,
         "y_headline": Y_HEADLINE,
         "y_line2": Y_LINE2,
         "y_metrics": Y_METRICS,
@@ -604,20 +612,33 @@ def _build_weather_wall_context(
     tomorrow = daily[1] if len(daily) > 1 else {}
 
     # Sunrise and sunset come from sun.sun, which is always loaded.
-    sun = states.get("sun.sun", {}).get("attributes", {})
+    sun_state = states.get("sun.sun", {})
+    sun = sun_state.get("attributes", {})
     sunset = _local(hass_dt, sun.get("next_setting"))
     sunrise = _local(hass_dt, sun.get("next_rising"))
-    sunset_ahead = sunset is not None and sunset > now
+    # sun.sun reports only the *next* rising and the *next* setting,
+    # so after sunset next_setting is tomorrow's, and comparing it
+    # against now says the sun has not gone down.  The entity's own
+    # state answers the question directly.
+    sun_up = sun_state.get("state") == "above_horizon"
+    sunset_ahead = sun_up
+
+    # Night is defined by the sun rather than the clock: in December
+    # the panel should go dark at six, in June not until ten.  This
+    # is decided here rather than above because it needs the states
+    # snapshot, so `base` has to be corrected after the fact.
+    if forced == "auto" and state == "evening" and not sun_up:
+        state = "night"
+    base["state"] = state
+    base["is_night"] = state == "night"
 
     night = state != "morning"
 
     # ---- headline --------------------------------------------
     if state == "morning":
         headline = _temp(today.get("temperature"))
-        uv_source = today
     else:
         headline = _temp(today.get("templow"))
-        uv_source = tomorrow
 
     # A temperature sensor override applies only to the morning
     # headline, where the number is a live reading rather than a
@@ -689,13 +710,22 @@ def _build_weather_wall_context(
     hours = []
     for i, e in enumerate(hours_raw):
         when = _local(hass_dt, e.get("datetime"))
-        # An hour is dark when it falls between sunset and the
-        # following sunrise.  sun.sun gives the next of each, so
-        # for hours beyond tomorrow's sunrise this is approximate;
-        # good enough for a two-hourly strip.
+        # sun.sun gives only the next rising and the next setting,
+        # so comparing an arbitrary forecast hour against them gives
+        # the wrong answer as soon as either has passed.  Shift both
+        # onto the hour's own date and compare within that day.
+        # Sunrise and sunset drift a minute or two per day, so for
+        # an hour several days out this is approximate; well within
+        # tolerance for a two-hourly strip.
         dark = False
         if when is not None and sunset is not None and sunrise is not None:
-            dark = when >= sunset or when < sunrise
+            up = sunrise.replace(
+                year=when.year, month=when.month, day=when.day
+            )
+            down = sunset.replace(
+                year=when.year, month=when.month, day=when.day
+            )
+            dark = when < up or when >= down
         hours.append({
             "cx": round(RIGHT_X + HOUR_W * (i + 0.5), 1),
             "icon": _icon_name(e, dark),
