@@ -697,13 +697,16 @@ def _build_weather_wall_context(
         solar_text = sunrise.strftime("%H:%M") if sunrise else ""
 
     # ---- ultraviolet -----------------------------------------
+    # Morning only.  The index is a daily maximum, so in the evening
+    # it describes a day that is over, and next to tonight's low or
+    # tomorrow's hours it reads as though it applied now.
     hide_below = _num(widget.get("uv_hide_below"))
     hide_below = UV_HIDE_BELOW if hide_below is None else hide_below
     warn_above = _num(widget.get("uv_warn_above"))
     warn_above = UV_WARN_ABOVE if warn_above is None else warn_above
-    uv = _num(uv_source.get("uv_index"))
-    uv_show = uv is not None and uv >= hide_below
-    uv_warn = uv is not None and uv > warn_above
+    uv = _num(today.get("uv_index"))
+    uv_show = state == "morning" and uv is not None and uv >= hide_below
+    uv_warn = uv_show and uv > warn_above
 
     # ---- the right-hand strip --------------------------------
     hours_raw = _pick_hours(hourly, hass_dt, now, state)
@@ -815,9 +818,7 @@ def _build_weather_wall_context(
         "uv_warn": uv_warn,
         "uv_text": f"{round(uv)}" if uv is not None else "",
         "header_left": "" if state == "morning" else "Tomorrow",
-        "header_uv": (
-            f"UV {round(uv)}" if uv_show and state != "morning" else ""
-        ),
+        "header_uv": "",
         "hours": hours,
         "rain_d": rain_d,
         "rain_mid": round(rain_mid, 1),
