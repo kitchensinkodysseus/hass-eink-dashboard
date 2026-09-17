@@ -40,9 +40,34 @@ widget does not use the shared icon loader.
 from __future__ import annotations
 
 import datetime as _dt
+import json
+import logging
+from pathlib import Path
 from typing import Any
 
 from ._helpers import _color_context, _widget_dim
+
+_LOGGER = logging.getLogger(__name__)
+
+# Climatological percentile thresholds, keyed by "MM-DD".  Built by
+# tools/build_climatology.py; see that script for the sources and
+# the baseline periods.  Loaded once at import rather than per
+# render: it never changes between restarts.  A missing file
+# degrades to no remarkable line rather than breaking the panel,
+# which matters because it is not in the upstream repository and a
+# future merge could lose it.
+_CLIMATOLOGY_PATH = Path(__file__).parent.parent / "climatology.json"
+
+try:
+    _CLIMATOLOGY: dict = json.loads(
+        _CLIMATOLOGY_PATH.read_text()
+    ).get("days", {})
+except Exception as exc:  # noqa: BLE001
+    _LOGGER.warning(
+        "weather_wall: no climatology table (%s); the remarkable "
+        "line will be suppressed", exc
+    )
+    _CLIMATOLOGY = {}
 
 # ---------------------------------------------------------------
 # Layout constants.  All values are 800 x 480 panel pixels.
@@ -154,11 +179,21 @@ PROB_HEAVY = 70
 
 # Lowest precipitation probability worth printing.
 PROB_MIN = 10
+# A day's measure is remarked on when it falls outside these
+# percentiles for the calendar date.  Any value stored by
+# build_climatology.py may be used: 1, 2, 5, 10, 20, 30, 40, 50,
+# 60, 70, 80, 90, 95, 98, 99.  Raise p90 toward p98 to quieten the
+# line; lower it toward p80 to make it chattier.
+REMARK_HIGH = "p90"
+REMARK_LOW = "p10"
 
-_COMPASS = (
-    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
-)
+# Absolute floors, applied as well as the percentile.  Without them
+# a December ultraviolet index of 1.2 counts as high for December,
+# which is true and useless.
+REMARK_UV_MIN = 5.0
+REMARK_GUST_MIN = 45.0
+
+_COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 
 # HA moon phase states to the key used by the template.
 _MOON_PHASES = {
@@ -212,11 +247,11 @@ def _signed(t: dict[str, object]) -> str:
 
 
 def _compass(bearing: Any) -> str:
-    """Return a sixteen-point compass abbreviation for a bearing."""
+    """Return an eight-point compass abbreviation for a bearing."""
     n = _num(bearing)
     if n is None:
         return ""
-    return _COMPASS[int((n % 360) / 22.5 + 0.5) % 16]
+    return _COMPASS[int((n % 360) / 45.0 + 0.5) % 8]
 
 
 def _local(hass_dt: Any, raw: str | None):
@@ -397,46 +432,76 @@ def _frost_warning(
     return ""
 
 
-def _remarkable(day: dict[str, Any], week: list[dict[str, Any]]) -> str:
-    """Return a short note when one measure stands out, else "".
+def _remarkable(day: dict[str, Any], when: Any) -> str:
+    """Return a short note when one measure is unusual, else "".
 
-    Interim implementation: each candidate is compared against the
-    spread of the days on screen.  The intended basis is a percentile
-    against a thirty-year climatology for the calendar date, which
-    needs an archive this widget does not yet carry, so treat the
-    thresholds here as placeholders.
+    Each candidate is compared against a percentile for the calendar
+    date, computed from thirty years of reanalysis over a fifteen-day
+    window.  An earlier version compared each day against the spread
+    of the days on screen, which measured "unusual for this week"
+    rather than "unusual for September" and rested on a sample of
+    five.
+
+    Whichever measure exceeds its threshold by the largest relative
+    margin wins, which keeps three quantities in different units
+    roughly comparable.
+
+    Args:
+        day: A daily forecast entry.
+        when: The local datetime of that day, or None.
+
+    Returns:
+        A short phrase, or an empty string when nothing stands out.
     """
-    def spread(key: str) -> tuple[float, float] | None:
-        vals = [v for d in week if (v := _num(d.get(key))) is not None]
-        if len(vals) < 3:
-            return None
-        mean = sum(vals) / len(vals)
-        var = sum((v - mean) ** 2 for v in vals) / len(vals)
-        return mean, var ** 0.5
+    if when is None or not _CLIMATOLOGY:
+        return ""
+    bands = _CLIMATOLOGY.get(f"{when.month:02d}-{when.day:02d}")
+    if not bands:
+        return ""
 
     candidates: list[tuple[float, str]] = []
 
+    def over(measure: str, value: float | None, floor: float):
+        """Relative margin above the upper percentile, or None."""
+        limit = bands.get(measure, {}).get(REMARK_HIGH)
+        if value is None or limit is None or value < floor:
+            return None
+        if limit <= 0 or value <= limit:
+            return None
+        return (value - limit) / limit
+
     uv = _num(day.get("uv_index"))
-    s = spread("uv_index")
-    if uv is not None and s and s[1] > 0 and uv >= 6:
-        candidates.append(((uv - s[0]) / s[1], f"UV {round(uv)}"))
+    margin = over("uv", uv, REMARK_UV_MIN)
+    if margin is not None:
+        candidates.append((margin, f"UV {round(uv)}"))
 
     gust = _num(day.get("wind_gust_speed"))
-    s = spread("wind_gust_speed")
-    if gust is not None and s and s[1] > 0 and gust >= 50:
-        candidates.append(((gust - s[0]) / s[1], f"gust {round(gust)}"))
+    margin = over("gust", gust, REMARK_GUST_MIN)
+    if margin is not None:
+        candidates.append((margin, f"gust {round(gust)}"))
 
+    # Overnight minimum, two-tailed: a mild night in February and a
+    # cold one in July are both worth saying.  Measured against the
+    # width of the band rather than against the value itself, since
+    # a minimum near zero would otherwise give an enormous margin.
     low = _num(day.get("templow"))
-    s = spread("templow")
-    if low is not None and s and s[1] > 0:
-        z = abs(low - s[0]) / s[1]
-        candidates.append((z, f"min {_signed(_temp(low))}"))
+    band = bands.get("tmin", {})
+    cold = band.get(REMARK_LOW)
+    warm = band.get(REMARK_HIGH)
+    if low is not None and cold is not None and warm is not None:
+        width = max(1.0, warm - cold)
+        if low < cold:
+            candidates.append(
+                ((cold - low) / width, f"min {_signed(_temp(low))}")
+            )
+        elif low > warm:
+            candidates.append(
+                ((low - warm) / width, f"min {_signed(_temp(low))}")
+            )
 
     if not candidates:
         return ""
-    best = max(candidates, key=lambda c: c[0])
-    return best[1] if best[0] >= 1.3 else ""
-
+    return max(candidates, key=lambda c: c[0])[1]
 
 def _rain_path(entries: list[dict[str, Any]]) -> tuple[str, float]:
     """Build the stepped rain-probability profile.
@@ -697,9 +762,9 @@ def _build_weather_wall_context(
         solar_text = sunrise.strftime("%H:%M") if sunrise else ""
 
     # ---- ultraviolet -----------------------------------------
-    # Morning only.  The index is a daily maximum, so in the evening
-    # it describes a day that is over, and next to tonight's low or
-    # tomorrow's hours it reads as though it applied now.
+        # Morning only.  The index is a daily maximum, so in the evening
+        # it describes a day that is over, and next to tonight's low or
+        # tomorrow's hours it reads as though it applied now.
     hide_below = _num(widget.get("uv_hide_below"))
     hide_below = UV_HIDE_BELOW if hide_below is None else hide_below
     warn_above = _num(widget.get("uv_warn_above"))
@@ -796,7 +861,7 @@ def _build_weather_wall_context(
                 if prob is not None and prob >= PROB_MIN
                 else ""
             ),
-            "remark": _remarkable(e, week),
+            "remark": _remarkable(e, when),
         })
 
     if state != "morning":
