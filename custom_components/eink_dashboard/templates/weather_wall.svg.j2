@@ -82,11 +82,18 @@
     <line x1="-5.7" y1="5.7" x2="-7.4" y2="7.4"/>
   </g>
 </g>
-<g id="wx-moon-clear">
-  <g transform="scale(1.15)"><use href="#m-gibbous"/></g>
-</g>
-<g id="wx-clear-night">
-  <g transform="scale(1.15)"><use href="#m-gibbous"/></g>
+{#- Clear night: stars rather than a moon.  A fixed gibbous would
+    be wrong on most nights, and the phase is drawn properly on the
+    hero where there is room for it.  Five points at this size will
+    lose definition to dithering, which is acceptable: the reading
+    is "clear sky", not "these particular stars". -#}
+<g id="wx-stars" fill="{{ c_fg }}">
+  <path d="M -3 -7.25 L -2.27 -5 L 0.09 -5 L -1.82 -3.62 L -1.09 -1.37
+           L -3 -2.76 L -4.91 -1.37 L -4.18 -3.62 L -6.09 -5 L -3.73 -5 Z"/>
+  <path d="M 6 -0.25 L 6.51 1.31 L 8.14 1.31 L 6.82 2.27 L 7.32 3.82
+           L 6 2.86 L 4.68 3.82 L 5.18 2.27 L 3.86 1.31 L 5.49 1.31 Z"/>
+  <path d="M -4 4.4 L -3.64 5.51 L -2.48 5.51 L -3.42 6.19 L -3.06 7.29
+           L -4 6.61 L -4.94 7.29 L -4.58 6.19 L -5.52 5.51 L -4.36 5.51 Z"/>
 </g>
 <g id="wx-cloud" fill="{{ c_fg }}">
   <circle cx="-5" cy="1" r="5"/>

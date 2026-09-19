@@ -116,7 +116,7 @@ RIGHT_RIGHT = 772
 HOUR_SLOTS = 7
 HOUR_W = (RIGHT_RIGHT - RIGHT_X) / HOUR_SLOTS
 Y_HOUR_LABEL = 92
-HOUR_ICON_CY = 120
+HOUR_ICON_CY = 130
 HOUR_SCALE = 1.58
 Y_HOUR_TEMP = Y_LINE2
 BAND_BOTTOM = 242
@@ -178,7 +178,11 @@ PROB_LIGHT = 40
 PROB_HEAVY = 70
 
 # Lowest precipitation probability worth printing.
-PROB_MIN = 10
+PROB_MIN = 15
+# The hero icon needs a higher bar than the columns.  A drop under
+# the largest glyph on the panel reads as a forecast of rain, so it
+# should not appear for a day that is merely not certainly dry.
+HERO_PROB_MIN = 25
 # A day's measure is remarked on when it falls outside these
 # percentiles for the calendar date.  Any value stored by
 # build_climatology.py may be used: 1, 2, 5, 10, 20, 30, 40, 50,
@@ -262,7 +266,7 @@ def _local(hass_dt: Any, raw: str | None):
     return hass_dt.as_local(parsed) if parsed else None
 
 
-def _drop_count(entry: dict[str, Any]) -> int:
+def _drop_count(entry: dict[str, Any], prob_min: float = PROB_MIN) -> int:
     """Return 0-3 precipitation marks for a forecast entry.
 
     Prefers a forecast amount where the provider gives one and falls
@@ -278,7 +282,7 @@ def _drop_count(entry: dict[str, Any]) -> int:
             return 2
         return 1
     prob = _num(entry.get("precipitation_probability"))
-    if prob is None or prob < PROB_MIN:
+    if prob is None or prob < prob_min:
         return 0
     if prob >= PROB_HEAVY:
         return 3
@@ -301,7 +305,11 @@ def _is_dark_cloud(entry: dict[str, Any]) -> bool:
     return cover is not None and cover >= CLOUD_IS_DARK
 
 
-def _icon_name(entry: dict[str, Any], night: bool = False) -> str:
+def _icon_name(
+    entry: dict[str, Any],
+    night: bool = False,
+    prob_min: float = PROB_MIN,
+) -> str:
     """Return the icon key for a forecast entry.
 
     Args:
@@ -309,12 +317,14 @@ def _icon_name(entry: dict[str, Any], night: bool = False) -> str:
         night: True to prefer the night variant of clear or partly
             clear skies.  The day strip always passes False, since
             those columns describe daytime whatever the hour.
+        prob_min: Lowest precipitation probability that earns a
+            drop.  The hero passes a higher value than the columns.
 
     Returns:
         A key matching a ``<g id="wx-...">`` in the template.
     """
     cond = str(entry.get("condition", ""))
-    drops = _drop_count(entry)
+    drops = _drop_count(entry, prob_min)
 
     if cond in ("lightning", "lightning-rainy"):
         return "wx-storm"
@@ -330,11 +340,15 @@ def _icon_name(entry: dict[str, Any], night: bool = False) -> str:
         return "wx-cloud-dark" if _is_dark_cloud(entry) else "wx-cloud"
     if cond == "partlycloudy":
         return "wx-moon-cloud" if night else "wx-sun-cloud"
-    if cond == "clear-night":
-        return "wx-clear-night"
+    # A clear night gets stars rather than a moon.  The moon's phase
+    # is drawn properly on the hero, where there is room for it; in
+    # a 42 px column a fixed gibbous would be wrong most nights, and
+    # tracking the phase at that size would not read.
+    if cond == "clear-night" or night:
+        return "wx-stars"
     if cond in ("windy", "windy-variant"):
         return "wx-cloud"
-    return "wx-moon-clear" if night else "wx-sun"
+    return "wx-sun"
 
 
 def _precip_word(entries: list[dict[str, Any]]) -> str:
@@ -802,11 +816,16 @@ def _build_weather_wall_context(
         })
     rain_d, rain_mid = _rain_path(hours_raw)
     caption = f"Chance of {_precip_word(hours_raw)}"
-    peaks = [
-        p for e in hours_raw
-        if (p := _num(e.get("precipitation_probability"))) is not None
-    ]
-    rain_peak = f"{round(max(peaks))}%" if peaks else ""
+    # The daily figure for whichever day the strip covers, not the
+    # peak across its hours: a maximum overstates, since fifteen per
+    # cent for one hour is not fifteen per cent all day.
+    rain_day = today if state == "morning" else tomorrow
+    rain_prob = _num(rain_day.get("precipitation_probability"))
+    rain_peak = (
+        f"{round(rain_prob)}%"
+        if rain_prob is not None and rain_prob >= PROB_MIN
+        else ""
+    )
 
    # ---- the hero icon, moon or weather ----------------------
     moon_phase = ""
@@ -820,16 +839,12 @@ def _build_weather_wall_context(
             ).get("state", "")
             moon_phase = _MOON_PHASES.get(str(moon_state), "")
     if not moon_phase:
-        # The daily entry covers the whole day including hours
-        # already past, so in the morning state the hero is derived
-        # from the hours still to come.  Otherwise a shower at
-        # breakfast still hangs a drop under the icon at teatime.
-        if state == "morning" and hours_raw:
-            worst = max(hours_raw, key=_drop_count)
-            hero_icon = _icon_name(worst, False)
-        else:
-            hero_icon = _icon_name(today, night)
-
+        # From the daily entry rather than the worst of the hours
+        # ahead: a peak overstates the day, since fifteen per cent
+        # for one hour is not the same proposition as fifteen per
+        # cent all day, and the hero is a summary rather than a
+        # warning.
+        hero_icon = _icon_name(today, night, HERO_PROB_MIN)
 
     # ---- the day strip ---------------------------------------
     try:
