@@ -368,6 +368,11 @@
 {%- endif -%}
 {#- The two-hourly strip. -#}
 {%- for hr in hours -%}
+{%- if hr.dark -%}
+<rect x="{{ hr.cx + tile_dx }}" y="{{ hour_icon_cy + tile_dy }}"
+      width="{{ tile_w }}" height="{{ tile_h }}"
+      rx="{{ tile_r }}" ry="{{ tile_r }}" fill="{{ c_dark }}"/>
+{%- endif -%}
 <text x="{{ hr.cx }}" y="{{ y_hour_label }}" font-size="{{ font_s }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="Roboto">{{ hr.label }}</text>

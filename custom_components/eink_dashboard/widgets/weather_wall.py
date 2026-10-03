@@ -117,6 +117,18 @@ HOUR_SLOTS = 7
 HOUR_W = (RIGHT_RIGHT - RIGHT_X) / HOUR_SLOTS
 Y_HOUR_LABEL = 92
 HOUR_ICON_CY = 130
+# A black tile behind any hourly icon falling after sunset, so the
+# stars and clouds sit against night rather than against the day
+# ground.  Offset left of the column centre because the icons are
+# not centred on their own origin: a cloud spans -11 to +14 units,
+# so its mass sits slightly right and a centred tile would clip the
+# dark cloud's rim.  Two pixels deeper than wide, since the icons
+# hang below their centre rather than straddling it.
+NIGHT_TILE_W = 50
+NIGHT_TILE_H = 87
+NIGHT_TILE_DX = -22
+NIGHT_TILE_DY = -60
+NIGHT_TILE_R = 6
 HOUR_SCALE = 1.58
 Y_HOUR_TEMP = Y_LINE2
 BAND_BOTTOM = 242
@@ -183,6 +195,19 @@ PROB_MIN = 15
 # the largest glyph on the panel reads as a forecast of rain, so it
 # should not appear for a day that is merely not certainly dry.
 HERO_PROB_MIN = 25
+
+# The gust is shown only when it is this much higher than the mean
+# wind speed.  "8 to 11 km/h" says nothing a single figure would
+# not; "8 to 20" says the day is blustery, which is the only reason
+# to spend the characters.
+GUST_RATIO = 1.5
+
+# A minimum at or below this is noted whatever the climatology
+# says.  Four degrees is entirely ordinary in January and still
+# means scraping the car, so the percentile test is the wrong
+# instrument for it.
+COLD_NOTE_AT = 4.0
+
 # A day's measure is remarked on when it falls outside these
 # percentiles for the calendar date.  Any value stored by
 # build_climatology.py may be used: 1, 2, 5, 10, 20, 30, 40, 50,
@@ -513,9 +538,17 @@ def _remarkable(day: dict[str, Any], when: Any) -> str:
                 ((low - warm) / width, f"min {_signed(_temp(low))}")
             )
 
-    if not candidates:
-        return ""
-    return max(candidates, key=lambda c: c[0])[1]
+    if candidates:
+        return max(candidates, key=lambda c: c[0])[1]
+
+    # Nothing is unusual for the time of year, but a cold night is
+    # worth saying whether or not it is unusual.  Deliberately
+    # outranked by everything above: a gale or a hard frost is the
+    # better thing to print, and this is only the default when the
+    # day is otherwise unremarkable.
+    if low is not None and low <= COLD_NOTE_AT:
+        return f"min {_signed(_temp(low))}"
+    return ""
 
 def _rain_path(entries: list[dict[str, Any]]) -> tuple[str, float]:
     """Build the stepped rain-probability profile.
@@ -665,6 +698,11 @@ def _build_weather_wall_context(
         "solar_icon_x": SOLAR_ICON_X,
         "y_hour_label": Y_HOUR_LABEL,
         "hour_icon_cy": HOUR_ICON_CY,
+        "tile_w": NIGHT_TILE_W,
+        "tile_h": NIGHT_TILE_H,
+        "tile_dx": NIGHT_TILE_DX,
+        "tile_dy": NIGHT_TILE_DY,
+        "tile_r": NIGHT_TILE_R,
         "y_hour_temp": Y_HOUR_TEMP,
         "y_caption": Y_CAPTION,
         "y_rule": Y_RULE,
@@ -760,7 +798,15 @@ def _build_weather_wall_context(
     speed = _num(today.get("wind_speed"))
     unit = attrs.get("wind_speed_unit", "km/h")
     bearing = _compass(today.get("wind_bearing"))
-    if speed is not None and gust is not None:
+    # The gust only earns its place when it is meaningfully above
+    # the mean; a range of a few km/h is noise dressed as detail.
+    gusty = (
+        speed is not None
+        and gust is not None
+        and speed > 0
+        and gust >= speed * GUST_RATIO
+    )
+    if gusty:
         wind_text = f"{bearing} {round(speed)}\u2013{round(gust)} {unit}"
     elif speed is not None:
         wind_text = f"{bearing} {round(speed)} {unit}"
@@ -799,18 +845,29 @@ def _build_weather_wall_context(
         # Sunrise and sunset drift a minute or two per day, so for
         # an hour several days out this is approximate; well within
         # tolerance for a two-hourly strip.
+        # Tested at the middle of the hour the entry describes,
+        # not at its start.  A column labelled 19 covers 19:00 to
+        # 20:00, so with sunset at 19:07 most of it is dark and the
+        # icon should say so; testing the instant would call it day.
+        #
+        # sun.sun reports only the next rising and setting, so both
+        # are shifted onto the hour's own date before comparing.
+        # They drift a minute or two a day, which is well within
+        # tolerance for a two-hourly strip.
         dark = False
         if when is not None and sunset is not None and sunrise is not None:
+            mid = when + _dt.timedelta(minutes=30)
             up = sunrise.replace(
-                year=when.year, month=when.month, day=when.day
+                year=mid.year, month=mid.month, day=mid.day
             )
             down = sunset.replace(
-                year=when.year, month=when.month, day=when.day
+                year=mid.year, month=mid.month, day=mid.day
             )
-            dark = when < up or when >= down
+            dark = mid < up or mid >= down
         hours.append({
             "cx": round(RIGHT_X + HOUR_W * (i + 0.5), 1),
             "icon": _icon_name(e, dark),
+            "dark": dark,
             "label": e.get("_label", ""),
             "temp": _temp(e.get("temperature")),
         })
