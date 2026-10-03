@@ -147,7 +147,7 @@ Y_DAY_PROB = 426
 Y_DAY_REMARK = 450
 
 # Night block.
-NIGHT_W = 358
+NIGHT_W = RIGHT_X - MARGIN
 NIGHT_H = Y_RULE
 
 # ---------------------------------------------------------------
