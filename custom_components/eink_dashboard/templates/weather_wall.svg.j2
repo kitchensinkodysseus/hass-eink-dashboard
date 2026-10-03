@@ -269,13 +269,16 @@
 {%- else -%}
 <text x="{{ margin }}" y="{{ y_date }}" font-size="{{ font_s }}"
       fill="{{ c_fg }}" font-family="Roboto">{{ date_text }}</text>
+{#- The header takes the right block's own edges, which are the
+    same edges the rain caption uses below it, so the block is
+    framed identically top and bottom. -#}
 {%- if header_left -%}
-<text x="{{ hours[0].cx if hours else right_x }}" y="{{ y_date }}"
+<text x="{{ right_x }}" y="{{ y_date }}"
       font-size="{{ font_s }}" fill="{{ c_fg }}"
       font-family="Roboto">{{ header_left }}</text>
 {%- endif -%}
 {%- if header_max -%}
-<text x="{{ right_right - 132 }}" y="{{ y_date }}"
+<text x="{{ right_right }}" y="{{ y_date }}"
       font-size="{{ font_s }}" text-anchor="end" fill="{{ c_fg }}"
       font-family="Roboto">{{ header_max }}</text>
 {%- endif -%}

@@ -365,15 +365,21 @@ def _icon_name(
         return "wx-cloud-dark" if _is_dark_cloud(entry) else "wx-cloud"
     if cond == "partlycloudy":
         return "wx-moon-cloud" if night else "wx-sun-cloud"
-    # A clear night gets stars rather than a moon.  The moon's phase
-    # is drawn properly on the hero, where there is room for it; in
-    # a 42 px column a fixed gibbous would be wrong most nights, and
-    # tracking the phase at that size would not read.
-    if cond == "clear-night" or night:
-        return "wx-stars"
     if cond in ("windy", "windy-variant"):
         return "wx-cloud"
-    return "wx-sun"
+    # Clear sky.  The provider's condition says what the sky is
+    # doing; whether it is dark is a separate question, answered by
+    # our own sunrise and sunset test rather than by the string.
+    # The two disagree at the edges: the Met Office labels an hour
+    # by its start, so 07:00 reads clear-night when sunrise is at
+    # 07:04, while the hour itself is light for fifty-six of its
+    # sixty minutes.  Taking darkness from one source keeps the icon
+    # and its background tile in step.
+    #
+    # Stars rather than a moon, because the phase is drawn properly
+    # on the hero where there is room for it, and a fixed gibbous in
+    # a 42 px column would be wrong most nights.
+    return "wx-stars" if night else "wx-sun"
 
 
 def _precip_word(entries: list[dict[str, Any]]) -> str:
