@@ -129,8 +129,13 @@
   </g>
 </g>
 <g id="wx-moon-cloud">
-  <g transform="translate(5,-11) scale(0.6)">
-    <use href="#m-gibbous"/>
+  {#- A waning crescent, mirrored so the lit limb is on the left.
+      It does not track the real phase: at this size a true
+      crescent is barely five units wide and would dither away,
+      and the phase is drawn properly on the hero where there is
+      room for it. -#}
+  <g transform="translate(6,-12) scale(-0.78,0.78)">
+    <use href="#m-crescent"/>
   </g>
   <g fill="{{ c_fg }}">
     <circle cx="-5" cy="1" r="5"/>
@@ -289,9 +294,13 @@
 {%- endif -%}
 {#- The hero: a moon phase when the sky is clear enough to show
     one, otherwise the weather condition. -#}
+{#- The moon is drawn first so a cloud, if there is one, covers its
+    lower left.  They are separate elements rather than a combined
+    glyph, which is what lets the real phase show on a half-clouded
+    night. -#}
 {%- if moon_phase -%}
-<g transform="translate({{ hero_cx }}, {{ hero_cy }})
-   scale({{ hero_scale }})">
+<g transform="translate({{ hero_cx + moon_dx }}, {{ hero_cy + moon_dy }})
+   scale({{ moon_scale }})">
 {%- if moon_phase == 'new' -%}
 <use href="#m-new"/>
 {%- elif moon_phase == 'wax_crescent' -%}
@@ -310,7 +319,8 @@
 <use href="#m-full"/>
 {%- endif -%}
 </g>
-{%- elif hero_icon -%}
+{%- endif -%}
+{%- if hero_icon -%}
 <g transform="translate({{ hero_cx }}, {{ hero_cy }})
    scale({{ hero_scale }})"><use href="#{{ hero_icon }}"/></g>
 {%- endif -%}

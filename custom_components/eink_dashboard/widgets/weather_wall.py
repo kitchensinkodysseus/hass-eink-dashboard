@@ -175,10 +175,27 @@ FROST_GROUND_CLOUD = 30  # per cent cloud cover
 FROST_GROUND_WIND = 10  # km/h
 ICE_PRECIP_MM = 0.2  # antecedent rainfall needed to freeze
 
-# Cloud cover at or above which the moon is not drawn, and at or
-# above which a cloud is drawn black rather than white.
-CLOUD_OBSCURES_MOON = 70
+# Overnight cloud cover deciding what the night hero shows.  Set
+# near the okta boundaries: under 30 per cent is a clear sky, 70
+# and above is mostly cloudy to overcast.  The figure used is the
+# mean across the overnight hours rather than the minimum, since
+# one clear hour at four in the morning should not earn a full
+# moon.  Cloud cover is reported only in the hourly forecast; the
+# daily entry carries none at all, which is why an earlier version
+# never suppressed the moon.
+MOON_CLEAR_BELOW = 30
+MOON_HIDDEN_AT = 70
+
+# Cloud cover at or above which a cloud is drawn black rather than
+# white.
 CLOUD_IS_DARK = 80
+
+# The moon behind a cloud: its size as a fraction of the clear-night
+# hero, and its offset in panel pixels, so the cloud covers its
+# lower left and the phase still shows above.
+MOON_BEHIND_SCALE = 0.64
+MOON_BEHIND_DX = 23
+MOON_BEHIND_DY = -36
 
 # Precipitation intensity bands, millimetres per hour, giving one,
 # two or three marks.
@@ -420,6 +437,29 @@ def _overnight_slice(
             break
     return out
 
+def _overnight_summary(
+    overnight: list[dict[str, Any]],
+) -> tuple[float | None, dict[str, Any]]:
+    """Summarise the night ahead for the hero icon.
+
+    Args:
+        overnight: Hourly entries covering tonight.
+
+    Returns:
+        ``(cover, worst)`` where ``cover`` is the mean cloud cover
+        across the hours, or ``None`` when none is reported, and
+        ``worst`` is the hour carrying the most precipitation, which
+        is the one the icon should describe.
+    """
+    if not overnight:
+        return None, {}
+    covers = [
+        c for e in overnight
+        if (c := _num(e.get("cloud_coverage"))) is not None
+    ]
+    cover = sum(covers) / len(covers) if covers else None
+    worst = max(overnight, key=lambda e: _drop_count(e, HERO_PROB_MIN))
+    return cover, worst
 
 def _frost_warning(
     overnight: list[dict[str, Any]],
@@ -894,20 +934,49 @@ def _build_weather_wall_context(
     moon_phase = ""
     hero_icon = ""
     if night:
-        cover = _num(today.get("cloud_coverage"))
-        obscured = cover is not None and cover >= CLOUD_OBSCURES_MOON
-        if not obscured and _drop_count(today) == 0:
+        # Built from the overnight hourly slice rather than from the
+        # daily entry, which describes a day that is largely over
+        # and carries no cloud cover at all.
+        overnight = _overnight_slice(hourly, hass_dt, now)
+        cover, worst = _overnight_summary(overnight)
+        if not worst:
+            worst = today
+        wet = _drop_count(worst, HERO_PROB_MIN) > 0
+
+        # Without an hourly slice there is no cover to judge by, so
+        # the condition string stands in: clear or nothing.
+        if cover is None:
+            clear = str(worst.get("condition", "")) in (
+                "clear-night", "sunny"
+            )
+            cover = 0.0 if clear else 100.0
+
+        if not wet and cover < MOON_HIDDEN_AT:
             moon_state = states.get(
                 widget.get("moon_entity", "sensor.moon_phase"), {}
             ).get("state", "")
             moon_phase = _MOON_PHASES.get(str(moon_state), "")
-    if not moon_phase:
-        # From the daily entry rather than the worst of the hours
-        # ahead: a peak overstates the day, since fifteen per cent
-        # for one hour is not the same proposition as fifteen per
-        # cent all day, and the hero is a summary rather than a
-        # warning.
-        hero_icon = _icon_name(today, night, HERO_PROB_MIN)
+
+        # The cloud is drawn as its own element rather than through
+        # wx-moon-cloud, whose moon is a fixed gibbous; composing the
+        # two lets the real phase show behind it.
+        if wet:
+            hero_icon = _icon_name(worst, True, HERO_PROB_MIN)
+        elif cover >= CLOUD_IS_DARK:
+            hero_icon = "wx-cloud-dark"
+        elif cover >= MOON_CLEAR_BELOW:
+            hero_icon = "wx-cloud"
+    else:
+        hero_icon = _icon_name(today, False, HERO_PROB_MIN)
+
+    if moon_phase and hero_icon:
+        moon_scale = round(HERO_SCALE * MOON_BEHIND_SCALE, 3)
+        moon_dx = MOON_BEHIND_DX
+        moon_dy = MOON_BEHIND_DY
+    else:
+        moon_scale = HERO_SCALE
+        moon_dx = 0
+        moon_dy = 0
 
     # ---- the day strip ---------------------------------------
     try:
@@ -952,6 +1021,9 @@ def _build_weather_wall_context(
         "date_text": now.strftime("%A %-d %B"),
         "hero_icon": hero_icon,
         "moon_phase": moon_phase,
+        "moon_scale": moon_scale,
+        "moon_dx": moon_dx,
+        "moon_dy": moon_dy,
         "headline": headline,
         "line2_kind": line2_kind,
         "line2_text": line2_text,
