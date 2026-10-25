@@ -762,14 +762,20 @@ def _build_weather_wall_context(
     }
 
     if entity is None:
-        return {**base, "has_state": False, "date_text": ""}
+        raise ValueError(
+            f"weather_wall: entity {entity_id!r} is not in the states "
+            "snapshot; refusing to render a panel with no forecast"
+        )
 
     attrs = entity.get("attributes", {})
     daily: list[dict[str, Any]] = attrs.get("forecast", []) or []
     hourly: list[dict[str, Any]] = attrs.get("forecast_hourly", []) or []
 
     if not daily:
-        return {**base, "has_state": False, "date_text": ""}
+        raise ValueError(
+            f"weather_wall: no daily forecast for {entity_id!r}; "
+            "refusing to render a panel with no forecast"
+        )
 
     today = daily[0]
     tomorrow = daily[1] if len(daily) > 1 else {}
