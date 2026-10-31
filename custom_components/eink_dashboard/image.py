@@ -11,6 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Modified in this fork (2026): a RenderNotReady raised by a widget is
+# treated as "not yet" (logged at debug, retried shortly, last image
+# kept) rather than as a failure.
 
 """ImageEntity that renders and refreshes the e-ink dashboard PNG."""
 
@@ -30,6 +34,7 @@ from homeassistant.helpers.aiohttp_client import (
 )
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import (
+    async_call_later,
     async_track_time_interval,
 )
 from homeassistant.helpers.template import Template, TemplateError
@@ -64,6 +69,7 @@ from .const import (
     DOMAIN,
     WidgetType,
 )
+from .exceptions import RenderNotReady
 from .push import async_push_image
 from .render import render_dashboard
 
@@ -71,6 +77,15 @@ _LOGGER = logging.getLogger(__name__)
 
 PUSH_MIN_INTERVAL = 300
 PUSH_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+# When a widget raises RenderNotReady (typically an entity that has not
+# loaded yet during start-up), retry after this many seconds rather than
+# waiting for the next scheduled refresh.  After NOT_READY_WARN_AFTER
+# consecutive not-ready attempts (five minutes at 30 s) the fast retries
+# stop and each further attempt is logged as a warning, because by then
+# it is a fault rather than a start-up ordering artefact.
+NOT_READY_RETRY_DELAY = 30
+NOT_READY_WARN_AFTER = 10
 
 # Maps widget type to the field name that supports Jinja2 templates.
 # Add new entries here when a new widget type gains a templatable field.
@@ -126,6 +141,8 @@ class EinkDashboardImage(ImageEntity):
         self._unsub: Callable[[], None] | None = None
         self._refresh_lock = asyncio.Lock()
         self._last_push: float | None = None
+        self._unsub_retry: Callable[[], None] | None = None
+        self._not_ready_count = 0
         self._attr_name = entry.title
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = DeviceInfo(
@@ -133,7 +150,13 @@ class EinkDashboardImage(ImageEntity):
         )
 
     async def async_added_to_hass(self) -> None:
-        """Schedule periodic refresh and render the first frame."""
+        """Schedule periodic refresh and render the first frame.
+
+        The first render runs straight away rather than waiting for Home
+        Assistant to finish starting, since one slow integration can
+        delay that by minutes.  If a widget's data has not loaded yet it
+        raises RenderNotReady, and the render is retried shortly.
+        """
         interval = self._entry.options.get(
             "update_interval", DEFAULT_UPDATE_INTERVAL
         )
@@ -151,9 +174,33 @@ class EinkDashboardImage(ImageEntity):
         await self._async_refresh(None)
 
     async def async_will_remove_from_hass(self) -> None:
-        """Cancel the periodic refresh subscription."""
+        """Cancel the periodic refresh and any pending retry."""
         if self._unsub:
             self._unsub()
+        if self._unsub_retry:
+            self._unsub_retry()
+            self._unsub_retry = None
+
+    def _schedule_not_ready_retry(self) -> None:
+        """Schedule one early retry after a not-ready render.
+
+        Does nothing if a retry is already pending, or if the not-ready
+        condition has persisted long enough to be treated as a fault, in
+        which case the normal refresh interval takes over.
+        """
+        if (
+            self._unsub_retry is not None
+            or self._not_ready_count >= NOT_READY_WARN_AFTER
+        ):
+            return
+        self._unsub_retry = async_call_later(
+            self.hass, NOT_READY_RETRY_DELAY, self._async_retry_refresh
+        )
+
+    async def _async_retry_refresh(self, _now: Any) -> None:
+        """Run the early retry scheduled after a not-ready render."""
+        self._unsub_retry = None
+        await self._async_refresh(None)
 
     def set_widgets(self, widgets: list[dict[str, Any]]) -> None:
         """Replace the current widget list without triggering a refresh."""
@@ -296,6 +343,7 @@ class EinkDashboardImage(ImageEntity):
                 new_bytes = await self.hass.async_add_executor_job(
                     render_dashboard, widgets, config
                 )
+                self._not_ready_count = 0
                 is_blank = await self.hass.async_add_executor_job(
                     _is_image_blank, new_bytes
                 )
@@ -348,6 +396,27 @@ class EinkDashboardImage(ImageEntity):
                         )
                 else:
                     _LOGGER.debug("_async_refresh: image unchanged")
+        except RenderNotReady as exc:
+            # A widget's data has not arrived yet.  Keep the last image
+            # (if any), stay quiet during start-up, and try again soon.
+            self._not_ready_count += 1
+            if self._not_ready_count >= NOT_READY_WARN_AFTER:
+                _LOGGER.warning(
+                    "_async_refresh: still not ready after %d attempts"
+                    " for %s: %s",
+                    self._not_ready_count,
+                    self._entry.entry_id,
+                    exc,
+                )
+            else:
+                _LOGGER.debug(
+                    "_async_refresh: not ready (attempt %d) for %s: %s",
+                    self._not_ready_count,
+                    self._entry.entry_id,
+                    exc,
+                )
+            self._schedule_not_ready_retry()
+            return
         except RuntimeError as exc:
             # Executor shut down between the is_stopping check and the
             # executor call — normal during HA shutdown, not an error.

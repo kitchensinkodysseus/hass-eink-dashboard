@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from ._helpers import _color_context, _widget_dim
+from ..exceptions import RenderNotReady
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -762,7 +763,7 @@ def _build_weather_wall_context(
     }
 
     if entity is None:
-        raise ValueError(
+        raise RenderNotReady(
             f"weather_wall: entity {entity_id!r} is not in the states "
             "snapshot; refusing to render a panel with no forecast"
         )
@@ -772,7 +773,7 @@ def _build_weather_wall_context(
     hourly: list[dict[str, Any]] = attrs.get("forecast_hourly", []) or []
 
     if not daily:
-        raise ValueError(
+        raise RenderNotReady(
             f"weather_wall: no daily forecast for {entity_id!r}; "
             "refusing to render a panel with no forecast"
         )
