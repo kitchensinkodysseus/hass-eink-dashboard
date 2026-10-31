@@ -117,9 +117,16 @@
 </g>
 <g id="wx-sun-cloud">
   <circle cx="5" cy="-9" r="4.5" fill="{{ c_sun }}"/>
-  <g stroke="{{ c_sun }}" stroke-width="1.5">
-    <line x1="5" y1="-16" x2="5" y2="-18.2"/>
-    <line x1="11" y1="-13" x2="12.8" y2="-14.4"/>
+  {#- Five rays rather than two: the sun is only half visible, so
+      the ones that would fall behind the cloud are omitted, but
+      everything clear of it is drawn.  Angles are the same 45
+      degree spacing as the full sun, measured about (5, -9). -#}
+  <g stroke="{{ c_sun }}" stroke-width="1.5" stroke-linecap="butt">
+    <line x1="5" y1="-15" x2="5" y2="-17.5"/>
+    <line x1="0.76" y1="-13.24" x2="-1" y2="-15"/>
+    <line x1="9.24" y1="-13.24" x2="11" y2="-15"/>
+    <line x1="-1" y1="-9" x2="-3.5" y2="-9"/>
+    <line x1="11" y1="-9" x2="13.5" y2="-9"/>
   </g>
   <g fill="{{ c_fg }}">
     <circle cx="-5" cy="1" r="5"/>
@@ -134,7 +141,7 @@
       crescent is barely five units wide and would dither away,
       and the phase is drawn properly on the hero where there is
       room for it. -#}
-  <g transform="translate(6,-12) scale(-0.78,0.78)">
+  <g transform="translate(10,-12) scale(-0.78,0.78)">
     <use href="#m-crescent"/>
   </g>
   <g fill="{{ c_fg }}">
