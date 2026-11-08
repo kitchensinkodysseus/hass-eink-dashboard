@@ -75,8 +75,17 @@ except Exception as exc:  # noqa: BLE001
 # ---------------------------------------------------------------
 
 MARGIN = 28
-CANVAS_W = 800
-CANVAS_H = 480
+
+# The design field.  All geometry below is expressed in this
+# space rather than in panel pixels, and the template's viewBox
+# maps it onto the real display.
+DESIGN_W = 800
+DESIGN_H = 480
+
+# Retained under the old names so the existing geometry reads
+# unchanged; they are the same numbers.
+CANVAS_W = DESIGN_W
+CANVAS_H = DESIGN_H
 
 # Type scale, four sizes on a root-two progression.
 FONT_XL = 80  # headline temperature
@@ -214,11 +223,14 @@ PROB_MIN = 15
 # should not appear for a day that is merely not certainly dry.
 HERO_PROB_MIN = 25
 
-# The gust is shown only when it is this much higher than the mean
-# wind speed.  "8 to 11 km/h" says nothing a single figure would
-# not; "8 to 20" says the day is blustery, which is the only reason
-# to spend the characters.
-GUST_RATIO = 1.5
+# The gust is shown only when it clears both of these: a ratio
+# above the mean, and an absolute margin.  A ratio alone fails at
+# the bottom of the scale, where 2 to 4 km/h is a doubling and
+# tells you nothing, while 20 to 40 is a gale.  Both tests have to
+# pass, so a light day shows one figure and a blustery one shows
+# the range.
+GUST_RATIO = 1.9
+GUST_MARGIN = 9.0
 
 # A minimum at or below this is noted whatever the climatology
 # says.  Four degrees is entirely ordinary in January and still
@@ -707,6 +719,8 @@ def _build_weather_wall_context(
     base: dict[str, object] = {
         "w": svg_w,
         "h": svg_h,
+        "design_w": DESIGN_W,
+        "design_h": DESIGN_H,
         "state": state,
         "is_night": state == "night",
         "night_w": NIGHT_W,
@@ -858,6 +872,7 @@ def _build_weather_wall_context(
         and gust is not None
         and speed > 0
         and gust >= speed * GUST_RATIO
+        and gust - speed >= GUST_MARGIN
     )
     if gusty:
         wind_text = f"{bearing} {round(speed)}\u2013{round(gust)} {unit}"

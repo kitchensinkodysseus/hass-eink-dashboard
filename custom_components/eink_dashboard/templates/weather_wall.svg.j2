@@ -16,8 +16,20 @@
 {%- set c_dark = "#000000" -%}
 {%- set c_warn = "#FF0000" -%}
 {%- set c_sun = "#FFFF00" -%}
+{#- A viewBox turns the pixel coordinates below into a design
+    space.  Every constant in weather_wall.py is a coordinate in
+    an 800 by 480 field; resvg maps that field onto whatever the
+    panel actually is, so the layout and its typography keep their
+    proportions at any resolution.
+
+    It scales but does not reflow: the field is 5:3, so a panel of
+    a different aspect letterboxes rather than rearranging.  That
+    covers the usual landscape colour panels; portrait would want
+    a different widget, not a different number here. -#}
 <svg xmlns="http://www.w3.org/2000/svg"
-     width="{{ w }}" height="{{ h }}">
+     width="{{ w }}" height="{{ h }}"
+     viewBox="0 0 {{ design_w }} {{ design_h }}"
+     preserveAspectRatio="xMidYMid meet">
 <defs>
 <g id="ww-wind">
   <path d="M -8 -3 h 9 a 3 3 0 1 0 -3 -3" fill="none"
@@ -269,7 +281,11 @@
   </g>
 </g>
 </defs>
-<rect x="0" y="0" width="{{ w }}" height="{{ h }}" fill="{{ c_bg }}"/>
+{#- Painted in the design space, not the output space: with a
+    viewBox in play, w and h are the panel's pixels while every
+    coordinate here is a design unit. -#}
+<rect x="0" y="0" width="{{ design_w }}" height="{{ design_h }}"
+      fill="{{ c_bg }}"/>
 {%- if is_night -%}
 <rect x="0" y="0" width="{{ night_w }}" height="{{ night_h }}"
       fill="{{ c_dark }}"/>
@@ -420,7 +436,7 @@
       font-family="Roboto">{{ rain_peak }}</text>
 {%- endif -%}
 {%- endif -%}
-<line x1="{{ margin }}" y1="{{ y_rule }}" x2="{{ w - margin }}"
+<line x1="{{ margin }}" y1="{{ y_rule }}" x2="{{ design_w - margin }}"
       y2="{{ y_rule }}" stroke="{{ c_fg }}" stroke-width="1.5"/>
 {#- The day strip. -#}
 {%- for d in days -%}
