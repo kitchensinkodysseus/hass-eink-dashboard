@@ -204,7 +204,7 @@ CLOUD_IS_DARK = 80
 # hero, and its offset in panel pixels, so the cloud covers its
 # lower left and the phase still shows above.
 MOON_BEHIND_SCALE = 0.64
-MOON_BEHIND_DX = 23
+MOON_BEHIND_DX = 28
 MOON_BEHIND_DY = -36
 
 # Precipitation intensity bands, millimetres per hour, giving one,
