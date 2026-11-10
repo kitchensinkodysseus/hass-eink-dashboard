@@ -12,7 +12,7 @@ layout designed for wall-mounted colour e-ink, developed on a
 Pimoroni Inky Frame 7.3" (Spectra 6). It shows the day or night
 ahead, a two-hourly strip with a rain-probability profile, and a
 week's outlook, with two-colour icons, moon phases, derived frost
-warnings, and notes when a day is unusual for the time of year.
+warnings, and notes when temperature or wind is unusual for the time of year.
 
 **Status: work in progress.** It works daily on one panel, but it
 currently assumes a 5:3 landscape display and a six-colour palette,
