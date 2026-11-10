@@ -11,11 +11,7 @@
     rain-bearing cloud.  The cloud shape is repeated in full in
     each icon rather than referenced, since resvg's handling of a
     <use> that points at another <use> is not guaranteed. -#}
-{%- set c_bg = "#0000FF" -%}
-{%- set c_fg = "#FFFFFF" -%}
-{%- set c_dark = "#000000" -%}
-{%- set c_warn = "#FF0000" -%}
-{%- set c_sun = "#FFFF00" -%}
+
 {#- A viewBox turns the pixel coordinates below into a design
     space.  Every constant in weather_wall.py is a coordinate in
     an 800 by 480 field; resvg maps that field onto whatever the
@@ -288,7 +284,7 @@
       fill="{{ c_bg }}"/>
 {%- if is_night -%}
 <rect x="0" y="0" width="{{ night_w }}" height="{{ night_h }}"
-      fill="{{ c_dark }}"/>
+      fill="{{ c_night }}"/>
 {%- endif -%}
 {%- if not has_state -%}
 <text x="{{ margin }}" y="{{ y_headline }}" font-size="{{ font_m }}"
@@ -359,13 +355,14 @@
     white on red is the strongest pairing either colour has. -#}
 <rect x="{{ left_right - uv_badge_w }}" y="{{ y_uv_badge }}"
       width="{{ uv_badge_w }}" height="{{ uv_badge_h }}"
-      rx="10" ry="10" fill="{{ c_warn }}"/>
+      rx="10" ry="10" fill="{{ c_warn }}"
+      stroke="{{ c_warn_stroke }}" stroke-width="2"/>
 <text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_uv_label }}"
       font-size="{{ font_s }}" font-weight="500" text-anchor="middle"
-      fill="{{ c_fg }}" font-family="{{ font }}, Roboto">UV</text>
+      fill="{{ c_warn_fg }}" font-family="{{ font }}, Roboto">UV</text>
 <text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_headline }}"
       font-size="{{ font_l }}" font-weight="500" text-anchor="middle"
-      fill="{{ c_fg }}" font-family="{{ font }}, Roboto">{{ uv_text }}</text>
+      fill="{{ c_warn_fg }}" font-family="{{ font }}, Roboto">{{ uv_text }}</text>
 {%- else -%}
 <text x="{{ left_right }}" y="{{ y_uv_label }}" font-size="{{ font_s }}"
       font-weight="500" text-anchor="end" fill="{{ c_fg }}"
@@ -407,7 +404,7 @@
 {%- if hr.dark -%}
 <rect x="{{ hr.cx + tile_dx }}" y="{{ hour_icon_cy + tile_dy }}"
       width="{{ tile_w }}" height="{{ tile_h }}"
-      rx="{{ tile_r }}" ry="{{ tile_r }}" fill="{{ c_dark }}"/>
+      rx="{{ tile_r }}" ry="{{ tile_r }}" fill="{{ c_night }}"/>
 {%- endif -%}
 <text x="{{ hr.cx }}" y="{{ y_hour_label }}" font-size="{{ font_s }}"
       text-anchor="middle" fill="{{ c_fg }}"

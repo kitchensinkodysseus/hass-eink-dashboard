@@ -446,6 +446,7 @@ export interface WeatherWallWidget extends WidgetBase {
   uv_warn_above?: number;
   force_state?: "auto" | "morning" | "evening" | "night";
   font_family?: string;
+  palette?: string;
 }
 
 /** Device battery level indicator in icon or chip layout. */

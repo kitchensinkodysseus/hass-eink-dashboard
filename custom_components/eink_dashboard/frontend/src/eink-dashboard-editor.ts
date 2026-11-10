@@ -806,6 +806,23 @@ export const SCHEMAS: Record<
           },
         },
         {
+          name: "palette",
+          default: "auto",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "auto", label: "From the display" },
+                { value: "bwgbry", label: "Six colour" },
+                { value: "bwry", label: "Black, white, red, yellow" },
+                { value: "bwr", label: "Black, white, red" },
+                { value: "bwy", label: "Black, white, yellow" },
+                { value: "grey", label: "Greyscale" },
+              ],
+            },
+          },
+        },        
+        {
           name: "uv_hide_below",
           default: 4,
           selector: { number: { min: 0, max: 11, mode: "box" } },
@@ -1786,6 +1803,7 @@ export const LABELS: Record<string, string> = {
   uv_warn_above: "Warn on UV above",
   force_state: "Force layout (preview)",
   font_family: "Typeface",
+  palette: "Palette",
 };
 
 // ── HA component loader ──────────────────────────────────────────

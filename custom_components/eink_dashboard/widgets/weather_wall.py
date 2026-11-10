@@ -119,7 +119,76 @@ _PERCENT_EM = {
     "Roboto": 0.76,
     "Drogowskaz": 0.70,
 }
-_PERCENT_EM_DEFAULT = 0.72
+_PERCENT_EM_DEFAULT = 0.
+
+# Palettes, keyed as the integration's color_scheme reports them.
+#
+# Every glyph is drawn from three names: c_fg for the main strokes
+# and fills, c_dark for the interior of a rain-bearing cloud, and
+# c_sun for the sun and the storm bolt.  On the six-colour panel
+# that gives white icons on blue; on a light ground, setting c_fg
+# and c_dark both to black inverts the set without redrawing it,
+# at the cost of light and dark clouds looking the same.
+#
+# c_night fills the night block and the post-sunset tiles.  On a
+# light ground it matches the ground, so both simply vanish: night
+# is then carried by the moon and stars.
+#
+# c_warn_stroke draws an outline round the warning badge; "none"
+# where the badge is a filled block.
+_LIGHT = {
+    "c_bg": "#FFFFFF", "c_fg": "#000000", "c_dark": "#000000",
+    "c_night": "#FFFFFF",
+}
+
+_PALETTES = {
+    "bwgbry": {
+        "c_bg": "#0000FF", "c_fg": "#FFFFFF", "c_dark": "#000000",
+        "c_night": "#000000", "c_sun": "#FFFF00",
+        "c_warn": "#FF0000", "c_warn_fg": "#FFFFFF",
+        "c_warn_stroke": "none",
+    },
+    "bwry": {
+        **_LIGHT, "c_sun": "#FFFF00",
+        "c_warn": "#FF0000", "c_warn_fg": "#FFFFFF",
+        "c_warn_stroke": "none",
+    },
+    "bwr": {
+        **_LIGHT, "c_sun": "#000000",
+        "c_warn": "#FF0000", "c_warn_fg": "#FFFFFF",
+        "c_warn_stroke": "none",
+    },
+    "bwy": {
+        **_LIGHT, "c_sun": "#FFFF00",
+        "c_warn": "#FFFF00", "c_warn_fg": "#000000",
+        "c_warn_stroke": "none",
+    },
+    # Greyscale is a compatibility mode: black on white throughout,
+    # and an outlined badge, since a filled one would be a block of
+    # dithered grey.
+    "grey": {
+        **_LIGHT, "c_sun": "#000000",
+        "c_warn": "none", "c_warn_fg": "#000000",
+        "c_warn_stroke": "#000000",
+    },
+}
+
+# Greyscale panels report no color_scheme.
+_PALETTE_GREY = "grey"
+
+
+def _palette(widget: dict, config: dict) -> dict[str, str]:
+    """Choose the palette for this render.
+
+    The widget's own ``palette`` option wins when set, which is how
+    a panel you do not own can be previewed; otherwise the display's
+    configured colour scheme decides, and anything unrecognised is
+    treated as greyscale.
+    """
+    chosen = str(widget.get("palette") or "auto")
+    if chosen == "auto":
+        chosen = str(config.get("color_scheme") or _PALETTE_GREY)
+    return dict(_PALETTES.get(chosen, _PALETTES[_PALETTE_GREY]))
 
 # Left block: the headline.
 LEFT_X = MARGIN
@@ -750,6 +819,7 @@ def _build_weather_wall_context(
         "design_w": DESIGN_W,
         "design_h": DESIGN_H,
         "font": font,
+        **_palette(widget, config),
         "deg_shift_m": round(
             FONT_M * _DEGREE_EM.get(font, _DEGREE_EM_DEFAULT) / 2, 1
         ),
