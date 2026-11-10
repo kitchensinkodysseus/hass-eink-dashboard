@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
+import itertools
 import re
-from typing import TYPE_CHECKING, ClassVar
+from typing import Any, ClassVar
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 from custom_components.eink_dashboard.const import (
     COLOR_GRAY,
@@ -36,6 +36,7 @@ from tests.helpers import (
     assert_has_dark_pixels,
     assert_has_gray_pixels,
     assert_scales_proportionally,
+    content_bbox,
     make_config,
     render_to_image,
 )
@@ -258,16 +259,8 @@ class TestRenderGraph:
         )
         assert "<polyline" in svg
 
-    def test_graph_bold_value_renders_bold_weight(self) -> None:
-        # bold_value=True renders the header value text with a
-        # bold font-weight attribute in the SVG.
-        svg = render_widget_svg(
-            self._base_widget(bold_value=True), self._config()
-        )
-        assert 'font-weight="bold"' in svg
-
     def test_graph_default_value_not_bold(self) -> None:
-        # Without bold_value, the header value text has no bold
+        # By default, the header value text has no bold
         # font-weight attribute.
         svg = render_widget_svg(self._base_widget(), self._config())
         assert 'font-weight="bold"' not in svg
@@ -314,6 +307,133 @@ class TestRenderGraph:
             self._base_widget(state_font_size=48), self._config()
         )
         assert ctx_large["unit_x"] > ctx_default["unit_x"]
+
+    # ── Font customization tests ──────────────────────────────────────
+
+    def test_graph_fonts_value_size_enlarges_header_value(self) -> None:
+        # fonts.value.size enlarges the header state text relative to
+        # the widget's derived default.  Name and icon are hidden so
+        # the measured header region holds the value (and its unit)
+        # alone.
+        base = self._base_widget(show_name=False, show_icon=False)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"value": {"size": 30}}}],
+            self._config(),
+        )
+        bbox_default = content_bbox(default, 0, 0, 400, DEFAULT_ROW_H)
+        bbox_bigger = content_bbox(bigger, 0, 0, 400, DEFAULT_ROW_H)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_graph_fonts_name_size_enlarges_header_name(self) -> None:
+        # fonts.name.size enlarges the header name text.  The state
+        # text and icon are hidden so the measured region holds the
+        # name alone.
+        base = self._base_widget(show_state=False, show_icon=False)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"name": {"size": 30}}}],
+            self._config(),
+        )
+        bbox_default = content_bbox(default, 0, 0, 400, DEFAULT_ROW_H)
+        bbox_bigger = content_bbox(bigger, 0, 0, 400, DEFAULT_ROW_H)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_graph_fonts_axis_size_enlarges_axis_labels(self) -> None:
+        # fonts.axis.size enlarges the Y-axis labels, which are the
+        # only content drawn left of the graph area's left edge.
+        base = self._base_widget(show_state=False, show_name=False)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"axis": {"size": 30}}}],
+            self._config(),
+        )
+        # Left of the graph area only the axis labels draw.  The
+        # Y-axis max label hangs from the graph area's top edge
+        # (header row + 2× stroke inset), so a band 48 px below the
+        # header row holds it and is clear of the min label at the
+        # bottom of the graph.
+        top = DEFAULT_ROW_H
+        bbox_default = content_bbox(default, 0, top, 40, top + 48)
+        bbox_bigger = content_bbox(bigger, 0, top, 40, top + 48)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_graph_fonts_value_size_beats_state_font_size(self) -> None:
+        # state_font_size is only the fallback for the value/unit size:
+        # an explicit fonts.value.size wins over it.
+        from custom_components.eink_dashboard.widgets.graph import (
+            _build_graph_context,
+        )
+
+        ctx = _build_graph_context(
+            self._base_widget(
+                state_font_size=24, fonts={"value": {"size": 32}}
+            ),
+            self._config(),
+        )
+        assert ctx["value_font_sz"] == 32
+
+    def test_graph_fonts_unit_size_beats_state_font_size(self) -> None:
+        # Same fallback rule for the unit role, which shares
+        # state_font_size with the value role by default.
+        from custom_components.eink_dashboard.widgets.graph import (
+            _build_graph_context,
+        )
+
+        ctx = _build_graph_context(
+            self._base_widget(
+                state_font_size=24, fonts={"unit": {"size": 20}}
+            ),
+            self._config(),
+        )
+        assert ctx["value_font_sz"] == 24
+        assert ctx["unit_font_sz"] == 20
+
+    def test_graph_fonts_value_weight_bold(self) -> None:
+        # fonts.value.weight="bold" renders the header value in bold.
+        widget = self._base_widget(fonts={"value": {"weight": "bold"}})
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="bold"' in svg
+
+    def test_graph_fonts_axis_weight_bold(self) -> None:
+        # fonts.axis.weight="bold" renders the axis, extrema, and
+        # legend labels in bold; nothing else in the widget is bold.
+        widget = self._base_widget(fonts={"axis": {"weight": "bold"}})
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="bold"' in svg
+
+    def test_graph_default_weights_are_unchanged(self) -> None:
+        # Without overrides the header name keeps the medium (500)
+        # weight it has always used, and value, unit, and axis labels
+        # render regular (400) rather than omitting the attribute.
+        svg = render_widget_svg(self._base_widget(), self._config())
+        assert 'font-weight="500"' in svg
+        assert 'font-weight="400"' in svg
+        assert 'font-weight="bold"' not in svg
+
+    def test_graph_fonts_axis_weight_applies_to_legend(self) -> None:
+        # The legend text is measured with the axis role's face, so
+        # the rendered legend must carry that same weight.  The header
+        # name is hidden so the entity name appears only in the legend.
+        widget = self._multi_widget(
+            show_name=False, fonts={"axis": {"weight": "bold"}}
+        )
+        svg = render_widget_svg(widget, self._config())
+        legend = re.search(r"<text[^>]*>Living Room</text>", svg)
+        assert legend is not None
+        assert 'font-weight="bold"' in legend.group(0)
 
     def test_graph_fill_shown_by_default(self) -> None:
         # With show_fill not set (default true) and smoothing off,
@@ -471,6 +591,45 @@ class TestRenderGraph:
         )
         assert default_render != named_render
 
+    def test_graph_single_entity_title(self) -> None:
+        # title= replaces the header name in single-entity mode, so
+        # the graph can be titled independently of the series.
+        svg = render_widget_svg(
+            self._base_widget(title="Climate"), self._config()
+        )
+        assert "Climate" in svg
+        assert "Living Room" not in svg
+
+    def test_graph_title_overrides_first_series_name(self) -> None:
+        # title= supplies the header text while each series keeps its
+        # own label, so the first series' name appears only in the
+        # legend.
+        widget = self._multi_widget(
+            title="Climate",
+            entities=[
+                {"entity": "sensor.temperature", "name": "Temp Override"},
+                {"entity": "sensor.humidity"},
+            ],
+        )
+        svg = render_widget_svg(widget, self._config())
+        assert svg.count("Climate") == 1
+        assert svg.count("Temp Override") == 1
+
+    def test_graph_blank_title_falls_back_to_first_series_name(
+        self,
+    ) -> None:
+        # An empty title keeps the backwards-compatible behaviour:
+        # the header shows the first series' name.
+        widget = self._multi_widget(
+            title="",
+            entities=[
+                {"entity": "sensor.temperature", "name": "Temp Override"},
+                {"entity": "sensor.humidity"},
+            ],
+        )
+        svg = render_widget_svg(widget, self._config())
+        assert svg.count("Temp Override") == 2
+
     def test_graph_unit_override(self) -> None:
         # unit= overrides the auto-detected unit_of_measurement and
         # changes the rendered output.
@@ -620,10 +779,11 @@ class TestRenderGraph:
         # With show_state (default True) and more than one entity
         # configured, the header shows every entity's current state
         # concatenated with " / ", not just the first entity's.
-        # (Humidity's raw "8.41" is capped to 1 decimal by _fmt,
-        # matching the single-value formatting used elsewhere.)
+        # (Humidity's raw "8.41" is rounded to 0 decimals by the
+        # device-class default, matching HA's own whole-percent
+        # display for humidity sensors.)
         svg = render_widget_svg(self._multi_widget(), self._config())
-        assert "22.5°C / 8.4%" in svg
+        assert "22.5°C / 8%" in svg
 
     def test_graph_multi_entity_show_state_false_hides_all_states(
         self,
@@ -634,7 +794,7 @@ class TestRenderGraph:
             self._multi_widget(show_state=False), self._config()
         )
         assert "22.5" not in svg
-        assert "8.4%" not in svg
+        assert "8%" not in svg
 
     def test_graph_multi_entity_combined_state_truncates_before_icon(
         self,
@@ -659,13 +819,19 @@ class TestRenderGraph:
         value_text = str(ctx["value_text"])
         assert value_text.endswith("…")
         assert "1,013.0hPa" not in value_text
-        # Truncated text must still end before the icon's left edge.
-        from custom_components.eink_dashboard.render import _load_font
-
-        font = _load_font(
-            int(ctx["value_font_sz"]),  # type: ignore[arg-type]
-            bold=bool(ctx["value_bold"]),
+        # Truncated text must still end before the icon's left edge
+        # when measured with the face the template renders.
+        from custom_components.eink_dashboard.const import FontWeight
+        from custom_components.eink_dashboard.render import (
+            _load_role_font,
         )
+
+        weight = {
+            "400": FontWeight.REGULAR,
+            "500": FontWeight.MEDIUM,
+            "bold": FontWeight.BOLD,
+        }[str(ctx["value_weight"])]
+        font = _load_role_font(int(ctx["value_font_sz"]), weight)
         text_end = int(ctx["value_x"]) + round(font.getlength(value_text))
         assert text_end <= int(ctx["icon_cx"]) - int(ctx["icon_r"])
 
@@ -676,7 +842,7 @@ class TestRenderGraph:
         # unit in the combined header text, matching the
         # single-entity override behaviour.
         svg = render_widget_svg(self._multi_widget(unit="X"), self._config())
-        assert "22.5X / 8.4X" in svg
+        assert "22.5X / 8X" in svg
 
     def test_graph_multi_entity_single_usable_state_shown(self) -> None:
         # When only one of several configured entities has a usable
@@ -1651,6 +1817,34 @@ class TestRenderGraph:
         svg = render_widget_svg(widget, self._config())
         assert "<svg" in svg
         assert "<polyline" not in svg
+
+    def test_graph_primary_missing_secondary_has_data_shows_labels(
+        self,
+    ) -> None:
+        # When the primary-axis entity has no data but a secondary-
+        # axis entity does, labels must still render from the
+        # secondary entity's points rather than silently disappearing
+        # because the primary-axis fallback picked an empty list.
+        widget: dict[str, object] = {
+            "type": "graph",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 280,
+            "entities": [
+                {"entity": "sensor.nonexistent"},
+                {
+                    "entity": "sensor.humidity",
+                    "y_axis": "secondary",
+                },
+            ],
+            "show_labels": True,
+            "smoothing": False,
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert "<polyline" in svg
+        # Secondary axis label (humidity range 65.0-70.0).
+        assert "65.0" in svg
 
     def test_graph_entities_empty_list_renders_blank(self) -> None:
         # An empty entities list renders valid SVG with no graph line.
@@ -3044,3 +3238,434 @@ class TestRenderGraph:
         assert 1.0 not in values
         assert 2.0 in values
         assert 3.0 in values
+
+
+class TestRenderGraphAxes:
+    """Verify graph axis layout, ticks, units, and tick lines.
+
+    Covers the bottom band layout (x-axis labels, extrema, legend must
+    not overlap), configurable tick counts on both axes, optional
+    tick marks and grid lines, y-axis units, and local-time labels.
+    """
+
+    _DEFAULTS: ClassVar[dict[str, object]] = {
+        "width": 400,
+        "height": 400,
+        "states": MOCK_GRAPH_STATES,
+    }
+
+    def _config(self, **overrides: object) -> dict[str, object]:
+        """Return display config merged with overrides."""
+        return make_config(self._DEFAULTS, **overrides)
+
+    def _widget(self, **overrides: object) -> dict[str, object]:
+        """Return a 400×280 two-entity graph widget with overrides."""
+        w: dict[str, object] = {
+            "type": "graph",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 280,
+            "entities": [
+                {"entity": "sensor.temperature"},
+                {"entity": "sensor.humidity"},
+            ],
+        }
+        w.update(overrides)
+        return w
+
+    def _single(self, **overrides: object) -> dict[str, object]:
+        """Return a 400×280 single-entity graph widget with overrides."""
+        w = self._widget(**overrides)
+        w.pop("entities")
+        w.setdefault("entity", "sensor.temperature")
+        return w
+
+    @staticmethod
+    def _ctx(
+        widget: dict[str, object], config: dict[str, object]
+    ) -> dict[str, Any]:
+        """Return the graph template context for ``widget``."""
+        from custom_components.eink_dashboard.widgets.graph import (
+            _build_graph_context,
+        )
+
+        return _build_graph_context(widget, config)  # type: ignore[arg-type]
+
+    # ── Bottom band layout ────────────────────────────────────────────
+
+    def test_legend_below_x_axis_labels(self) -> None:
+        # The legend band starts below the x-axis label text, so the
+        # two never overlap (regression: the legend was drawn on top
+        # of the time labels).
+        ctx = self._ctx(self._widget(), self._config())
+        assert ctx["show_legend"]
+        assert ctx["show_labels"]
+        x_label_bottom = ctx["x_label_y"] + ctx["label_font_sz"]
+        legend_top = ctx["legend_y"]
+        assert legend_top >= x_label_bottom, (legend_top, x_label_bottom)
+
+    def test_extrema_between_x_labels_and_legend(self) -> None:
+        # With labels, extrema and legend all enabled the bands stack
+        # top to bottom without overlapping: plot, x-axis labels,
+        # extrema, legend.
+        ctx = self._ctx(self._widget(show_extrema=True), self._config())
+        x_label_bottom = ctx["x_label_y"] + ctx["label_font_sz"]
+        assert ctx["extrema_y"] >= x_label_bottom
+        extrema_bottom = ctx["extrema_y"] + ctx["extrema_font_sz"]
+        assert ctx["legend_y"] >= extrema_bottom
+        legend_bottom = ctx["legend_y"] + ctx["label_font_sz"]
+        assert legend_bottom <= ctx["h"]
+
+    def test_x_axis_labels_directly_below_plot(self) -> None:
+        # The x-axis labels sit right under the plot area, not under
+        # the legend.
+        ctx = self._ctx(self._widget(), self._config())
+        assert ctx["gy2"] <= ctx["x_label_y"]
+        assert ctx["x_label_y"] - ctx["gy2"] <= ctx["label_font_sz"]
+
+    # ── X-axis ticks ──────────────────────────────────────────────────
+
+    def test_default_x_ticks_are_oldest_and_newest(self) -> None:
+        # Without x_axis_ticks the axis keeps its two labels at the
+        # left and right edge of the plot.
+        ctx = self._ctx(self._single(), self._config())
+        ticks = ctx["x_ticks"]
+        assert len(ticks) == 2
+        assert ticks[0]["x"] == ctx["x_label_left"]
+        assert ticks[-1]["x"] == ctx["x_label_right"]
+
+    def test_x_axis_ticks_adds_round_time_labels(self) -> None:
+        # x_axis_ticks=5 places up to five labels at round times
+        # (full hours for a ~22 h window) inside the plot.
+        ctx = self._ctx(self._single(x_axis_ticks=5), self._config())
+        ticks = ctx["x_ticks"]
+        assert 3 <= len(ticks) <= 5, ticks
+        for tick in ticks:
+            assert re.fullmatch(r"\d{2}:00", str(tick["label"])), tick
+            assert ctx["x_label_left"] <= tick["x"] <= ctx["x_label_right"]
+        xs = [t["x"] for t in ticks]
+        assert xs == sorted(xs)
+
+    def test_x_axis_ticks_thinned_to_fit(self) -> None:
+        # On a narrow graph a large tick count is reduced so the
+        # labels never overlap.
+        from custom_components.eink_dashboard.render import _load_font
+
+        ctx = self._ctx(self._single(w=160, x_axis_ticks=12), self._config())
+        ticks = ctx["x_ticks"]
+        font = _load_font(ctx["label_font_sz"])
+        widths = [font.getlength(str(t["label"])) for t in ticks]
+        for i in range(len(ticks) - 1):
+            gap = ticks[i + 1]["x"] - ticks[i]["x"]
+            assert gap >= (widths[i] + widths[i + 1]) / 2, ticks
+
+    def test_x_axis_ticks_rendered_in_svg(self) -> None:
+        # Every tick label appears as text in the rendered SVG.
+        widget = self._single(x_axis_ticks=5)
+        ctx = self._ctx(widget, self._config())
+        svg = render_widget_svg(widget, self._config())
+        for tick in ctx["x_ticks"]:
+            assert f">{tick['label']}</text>" in svg
+
+    def test_bar_x_ticks_on_bar_centres(self) -> None:
+        # In bar mode x ticks label individual bars at their centres.
+        widget = self._single(graph="bar", x_axis_ticks=4)
+        ctx = self._ctx(widget, self._config())
+        centres = {b["x"] + b["w"] / 2 for b in ctx["series"][0]["bars"]}
+        assert len(ctx["x_ticks"]) >= 2
+        for tick in ctx["x_ticks"]:
+            assert any(abs(tick["x"] - c) <= 1 for c in centres), tick
+
+    # ── Y-axis ticks ──────────────────────────────────────────────────
+
+    def test_default_y_ticks_are_min_and_max(self) -> None:
+        # Without y_axis_ticks the axis shows only its min and max.
+        ctx = self._ctx(self._single(), self._config())
+        labels = [t["label"] for t in ctx["y_ticks"]]
+        assert labels == ["20.0", "23.0"]
+
+    def test_y_axis_ticks_use_round_values(self) -> None:
+        # y_axis_ticks=5 on a 20–23 range gives labels at whole
+        # numbers, positioned on the plot's value scale.
+        ctx = self._ctx(self._single(y_axis_ticks=5), self._config())
+        labels = [t["label"] for t in ctx["y_ticks"]]
+        assert labels == ["20", "21", "22", "23"]
+        gy1, gy2 = ctx["gy1"], ctx["gy2"]
+        for tick in ctx["y_ticks"]:
+            v = float(str(tick["label"]))
+            expected = gy2 - (v - 20.0) / 3.0 * (gy2 - gy1)
+            assert abs(tick["y"] - expected) <= 1, tick
+
+    def test_y_axis_ticks_locale_formatted(self) -> None:
+        # Fractional tick values use the locale decimal separator.
+        ctx = self._ctx(
+            self._single(y_axis_ticks=8),
+            self._config(number_format="decimal_comma", language="de"),
+        )
+        labels = [str(t["label"]) for t in ctx["y_ticks"]]
+        assert "20,5" in labels, labels
+
+    def test_y_axis_unit_appended(self) -> None:
+        # y_axis_unit=True appends the entity unit to every y label.
+        ctx = self._ctx(self._single(y_axis_unit=True), self._config())
+        assert [t["label"] for t in ctx["y_ticks"]] == [
+            "20.0 °C",
+            "23.0 °C",
+        ]
+
+    def test_y_axis_unit_uses_unit_override(self) -> None:
+        # A widget-level unit override is used on the axis too.
+        ctx = self._ctx(
+            self._single(y_axis_unit=True, unit="K"), self._config()
+        )
+        assert all(str(t["label"]).endswith(" K") for t in ctx["y_ticks"])
+
+    def test_y_axis_unit_off_by_default(self) -> None:
+        # Without y_axis_unit the labels are plain numbers.
+        ctx = self._ctx(self._single(), self._config())
+        assert all("°C" not in str(t["label"]) for t in ctx["y_ticks"])
+
+    @staticmethod
+    def _y_label_boxes(
+        ticks: list[dict[str, Any]], font_sz: int
+    ) -> list[tuple[float, float]]:
+        """Return the (top, bottom) em box of every y label."""
+        boxes = []
+        for t in ticks:
+            ly = float(t["label_y"])
+            if t["baseline"] == "auto":
+                boxes.append((ly - font_sz, ly))
+            elif t["baseline"] == "hanging":
+                boxes.append((ly, ly + font_sz))
+            else:
+                boxes.append((ly - font_sz / 2, ly + font_sz / 2))
+        return boxes
+
+    def test_y_axis_ticks_thinned_to_fit(self) -> None:
+        # On a short graph a large tick count is reduced so the
+        # value labels never overlap vertically.
+        ctx = self._ctx(
+            self._single(h=110, y_axis_ticks=12, show_name=False),
+            self._config(),
+        )
+        ticks = ctx["y_ticks"]
+        assert len(ticks) < 12
+        boxes = self._y_label_boxes(ticks, ctx["label_font_sz"])
+        for lower, upper in itertools.pairwise(boxes):
+            assert lower[0] >= upper[1], ticks
+
+    def test_y_axis_ticks_keep_count_on_tall_graph(self) -> None:
+        # A tall graph keeps the requested number of value labels.
+        ctx = self._ctx(
+            self._single(h=400, y_axis_ticks=4), self._config(height=600)
+        )
+        assert [t["label"] for t in ctx["y_ticks"]] == ["20", "21", "22", "23"]
+
+    @pytest.mark.parametrize("value", ["abc", None, "nan", "inf", [3], ""])
+    def test_malformed_tick_count_falls_back(self, value: object) -> None:
+        # A malformed stored tick count does not crash rendering and
+        # falls back to the default min/max labels.
+        ctx = self._ctx(
+            self._single(x_axis_ticks=value, y_axis_ticks=value),
+            self._config(),
+        )
+        assert len(ctx["x_ticks"]) == 2
+        assert len(ctx["y_ticks"]) == 2
+
+    def test_out_of_range_tick_count_clamped(self) -> None:
+        # Tick counts outside 2-12 are clamped instead of misbehaving.
+        from custom_components.eink_dashboard.widgets.graph.context import (
+            _tick_count,
+        )
+
+        assert _tick_count({"y_axis_ticks": -5}, "y_axis_ticks") == 2
+        assert _tick_count({"y_axis_ticks": 100}, "y_axis_ticks") == 12
+        assert _tick_count({"y_axis_ticks": "7"}, "y_axis_ticks") == 7
+        assert _tick_count({}, "y_axis_ticks") == 2
+
+    def test_secondary_axis_ticks_and_unit(self) -> None:
+        # The secondary axis follows y_axis_ticks and shows its own
+        # entity's unit.
+        widget = self._widget(
+            entities=[
+                {"entity": "sensor.temperature"},
+                {"entity": "sensor.humidity", "y_axis": "secondary"},
+            ],
+            y_axis_ticks=4,
+            y_axis_unit=True,
+        )
+        ctx = self._ctx(widget, self._config())
+        labels = [str(t["label"]) for t in ctx["y2_ticks"]]
+        assert len(labels) >= 3
+        assert all(lbl.endswith(" %") for lbl in labels), labels
+
+    # ── Tick marks and grid lines ─────────────────────────────────────
+
+    @staticmethod
+    def _lines(svg: str) -> list[dict[str, float]]:
+        """Return the coordinates of every <line> element in ``svg``."""
+        out = []
+        for tag in re.findall(r"<line\b[^>]*>", svg):
+            coords = dict(re.findall(r'\b(x1|y1|x2|y2)="([-\d.]+)"', tag))
+            out.append({k: float(v) for k, v in coords.items()})
+        return out
+
+    def test_tick_marks_off_by_default(self) -> None:
+        # On a 2-level display (no grid) the default graph draws no
+        # lines at all.
+        svg = render_widget_svg(self._single(), self._config(display_levels=2))
+        assert self._lines(svg) == []
+
+    def test_x_axis_tick_marks(self) -> None:
+        # x_axis_tick_marks draws one short vertical mark below the
+        # plot for every x tick.
+        widget = self._single(x_axis_ticks=5, x_axis_tick_marks=True)
+        config = self._config(display_levels=2)
+        ctx = self._ctx(widget, config)
+        lines = self._lines(render_widget_svg(widget, config))
+        marks = [ln for ln in lines if ln["x1"] == ln["x2"]]
+        assert len(marks) == len(ctx["x_ticks"])
+        for mark in marks:
+            assert mark["y1"] >= ctx["gy2"] - 1
+            assert mark["y2"] <= ctx["x_label_y"]
+
+    def test_y_axis_tick_marks(self) -> None:
+        # y_axis_tick_marks draws one short horizontal mark left of the
+        # plot for every y tick.
+        widget = self._single(y_axis_ticks=5, y_axis_tick_marks=True)
+        config = self._config(display_levels=2)
+        ctx = self._ctx(widget, config)
+        lines = self._lines(render_widget_svg(widget, config))
+        marks = [ln for ln in lines if ln["y1"] == ln["y2"]]
+        assert len(marks) == len(ctx["y_ticks"])
+        for mark in marks:
+            assert mark["x2"] <= ctx["x_label_left"] + 1
+
+    def test_y_axis_grid_lines_span_plot(self) -> None:
+        # y_axis_grid draws a horizontal line across the full plot
+        # width at every y tick.
+        widget = self._single(y_axis_ticks=5, y_axis_grid=True)
+        config = self._config(display_levels=2)
+        ctx = self._ctx(widget, config)
+        lines = self._lines(render_widget_svg(widget, config))
+        grid = [
+            ln
+            for ln in lines
+            if ln["y1"] == ln["y2"]
+            and ln["x1"] == ctx["x_label_left"]
+            and ln["x2"] == ctx["x_label_right"]
+        ]
+        assert len(grid) == len(ctx["y_ticks"])
+
+    def test_x_axis_grid_lines_span_plot(self) -> None:
+        # x_axis_grid draws a vertical line across the full plot
+        # height at every x tick.
+        widget = self._single(x_axis_ticks=5, x_axis_grid=True)
+        config = self._config(display_levels=2)
+        ctx = self._ctx(widget, config)
+        lines = self._lines(render_widget_svg(widget, config))
+        grid = [
+            ln
+            for ln in lines
+            if ln["x1"] == ln["x2"]
+            and ln["y1"] == ctx["gy1"]
+            and ln["y2"] == ctx["gy2"]
+        ]
+        assert len(grid) == len(ctx["x_ticks"])
+
+    def test_grid_lines_dotted_on_two_level_display(self) -> None:
+        # On 2-level displays grid lines are drawn dotted in black so
+        # they stay faint instead of turning into solid black lines.
+        svg = render_widget_svg(
+            self._single(y_axis_ticks=5, y_axis_grid=True),
+            self._config(display_levels=2),
+        )
+        grid_tags = [
+            t for t in re.findall(r"<line\b[^>]*>", svg) if "dasharray" in t
+        ]
+        assert grid_tags
+        assert all('stroke="#000000"' in t for t in grid_tags)
+
+    def test_grid_lines_light_gray_on_grayscale(self) -> None:
+        # On grayscale displays grid lines are solid light gray.
+        svg = render_widget_svg(
+            self._single(y_axis_ticks=5, y_axis_grid=True),
+            self._config(display_levels=16),
+        )
+        tags = re.findall(r"<line\b[^>]*>", svg)
+        assert tags
+        assert all("dasharray" not in t for t in tags)
+
+    def test_y_axis_grid_keeps_edge_borders(self) -> None:
+        # Enabling y_axis_grid keeps the plot's top and bottom border
+        # lines on grayscale displays, without duplicating them.
+        widget = self._single(y_axis_ticks=5, y_axis_grid=True)
+        config = self._config(display_levels=16)
+        ctx = self._ctx(widget, config)
+        assert ctx["show_grid"]
+        lines = self._lines(render_widget_svg(widget, config))
+        full_width = [
+            ln["y1"]
+            for ln in lines
+            if ln["y1"] == ln["y2"]
+            and ln["x1"] == ctx["x_label_left"]
+            and ln["x2"] == ctx["x_label_right"]
+        ]
+        assert full_width.count(ctx["gy1"]) == 1
+        assert full_width.count(ctx["gy2"]) == 1
+
+    def test_x_edge_labels_clamped_without_overlap(self) -> None:
+        # Edge labels pushed inward to stay inside the plot keep a
+        # gap to their neighbour instead of crowding it.
+        from custom_components.eink_dashboard.widgets.graph.axes import (
+            _fit_centred_labels,
+        )
+
+        # Ticks 40 px apart with 30 px labels fit unclamped, but the
+        # first label clamped to x=15 would leave only a 0 px gap.
+        assert _fit_centred_labels([0, 40], [30, 30], 0, 200, 5) is None
+        assert _fit_centred_labels([20, 70], [30, 30], 0, 200, 5) == [20, 70]
+
+    def test_x_tick_labels_never_overlap_after_clamping(self) -> None:
+        # For many widths and tick counts the final label boxes of
+        # neighbouring x ticks never overlap.
+        from custom_components.eink_dashboard.render import _load_font
+
+        for w in range(120, 400, 20):
+            for count in (3, 6, 12):
+                for graph in ("line", "bar"):
+                    ctx = self._ctx(
+                        self._single(w=w, x_axis_ticks=count, graph=graph),
+                        self._config(),
+                    )
+                    ticks = ctx["x_ticks"]
+                    if len(ticks) <= 2 and ticks[0]["anchor"] == "start":
+                        continue
+                    font = _load_font(ctx["label_font_sz"])
+                    for a, b in itertools.pairwise(ticks):
+                        a_r = a["label_x"] + font.getlength(a["label"]) / 2
+                        b_l = b["label_x"] - font.getlength(b["label"]) / 2
+                        assert b_l - a_r >= font.size / 2, (w, count, ticks)
+
+    # ── Time zone ─────────────────────────────────────────────────────
+
+    def test_time_labels_use_configured_time_zone(self) -> None:
+        # Time labels are shown in HA's configured time zone instead
+        # of UTC (Berlin is UTC+2 in May).
+        utc = self._ctx(self._single(), self._config())
+        berlin = self._ctx(
+            self._single(), self._config(time_zone="Europe/Berlin")
+        )
+
+        def minutes(label: object) -> int:
+            hh, mm = str(label).split(":")
+            return int(hh) * 60 + int(mm)
+
+        for u, b in zip(utc["x_ticks"], berlin["x_ticks"], strict=True):
+            assert (minutes(b["label"]) - minutes(u["label"])) % 1440 == 120
+
+    def test_invalid_time_zone_falls_back_to_utc(self) -> None:
+        # An unknown time zone name does not crash rendering.
+        ctx = self._ctx(self._single(), self._config(time_zone="Nowhere/X"))
+        assert len(ctx["x_ticks"]) == 2

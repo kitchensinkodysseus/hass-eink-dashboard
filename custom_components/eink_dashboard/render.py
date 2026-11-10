@@ -30,8 +30,7 @@ import io
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from babel import UnknownLocaleError
 from babel.dates import format_date
@@ -43,9 +42,11 @@ from .const import (
     DEFAULT_USE_SYSTEM_FONTS,
     PADDING,
     DisplayConfig,
+    FontWeight,
     NumberFormat,
     Widget,
 )
+from .fonts import font_path, pixel_font_size, text_font_family
 from .optimize import optimize_for_eink
 from .svg_render import (
     _SVG_RENDERERS,
@@ -53,49 +54,161 @@ from .svg_render import (
     render_widget_svg,
 )
 
-_LOGGER = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
-_FONTS_DIR = Path(__file__).parent / "fonts" / "Roboto"
+    from .widget_config import WidgetBase
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _load_font(
-    size: int, medium: bool = False, bold: bool = False
+    size: int,
+    medium: bool = False,
+    bold: bool = False,
+    family: str | None = None,
 ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load Roboto at the given pixel size, falling back to PIL default.
+    """Load a bundled font at the given size.
 
     Args:
-        size: Font size in pixels (clamped to a minimum of 1).
-        medium: When True, load Roboto Medium (weight 500) instead of
-            Roboto Regular (weight 400).
-        bold: When True, load Roboto Bold (weight 700). Takes
+        size: Font size in pixels (clamped to a minimum of 1).  Snapped
+            to the TRMNL pixel grid when pixel fonts are active, so
+            measurements match the size the SVG renders at.
+        medium: When True, load Roboto or Inter Medium when available.
+        bold: When True, load the selected font's bold weight. Takes
             precedence over ``medium``.
+        family: Optional family override; otherwise the family that
+            draws text at ``size`` in the current render context is used
+            (Inter for TRMNL text above the large-text limit).
 
     Returns:
         A FreeTypeFont loaded from the TTF file, or the PIL built-in
         default font if the TTF is not found.
     """
-    return _load_font_cached(max(1, size), medium, bold)
+    return _load_font_cached(
+        max(1, round(pixel_font_size(size))),
+        medium,
+        bold,
+        family or text_font_family(size),
+    )
 
 
 @functools.cache
 def _load_font_cached(
-    size: int, medium: bool, bold: bool = False
+    size: int, medium: bool, bold: bool, family: str
 ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load a font at the given size (unclamped, cached).
 
     Separated from _load_font so that size=0 and size=1 produce distinct
     cache entries instead of colliding after the clamp.
     """
-    if bold:
-        filename = "Roboto-Bold.ttf"
-    elif medium:
-        filename = "Roboto-Medium.ttf"
-    else:
-        filename = "Roboto-Regular.ttf"
-    ttf_path = _FONTS_DIR / filename
+    ttf_path = font_path(size, bold=bold, medium=medium, family=family)
     if ttf_path.exists():
         return ImageFont.truetype(str(ttf_path), size)
     return ImageFont.load_default(size)
+
+
+# SVG ``font-weight`` value for each resolved FontWeight.  MEDIUM
+# uses the numeric form and BOLD the keyword form to match the
+# literals the widget templates have always emitted.
+_FONT_WEIGHT_SVG: dict[FontWeight, str] = {
+    FontWeight.REGULAR: "400",
+    FontWeight.MEDIUM: "500",
+    FontWeight.BOLD: "bold",
+}
+
+
+def _font_weight_svg(weight: FontWeight) -> str:
+    """Return the SVG ``font-weight`` value for a resolved weight.
+
+    Args:
+        weight: Resolved font weight.
+
+    Returns:
+        ``"400"``, ``"500"``, or ``"bold"``.
+    """
+    return _FONT_WEIGHT_SVG[weight]
+
+
+def _load_role_font(
+    size: int, weight: FontWeight
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load the face matching a resolved size and weight.
+
+    Every widget that measures text with PIL must use this rather
+    than ``_load_font`` directly, so the measured advance width
+    matches the face the SVG renders — otherwise right-aligned
+    values, unit offsets, and width truncation drift.
+
+    Args:
+        size: Font size in pixels.
+        weight: Resolved font weight.
+
+    Returns:
+        The selected family's face for ``weight``, or the PIL
+        built-in default font when the TTF is unavailable.
+    """
+    return _load_font(
+        size,
+        medium=weight is FontWeight.MEDIUM,
+        bold=weight is FontWeight.BOLD,
+    )
+
+
+def resolve_font(
+    widget: WidgetBase,
+    role: str,
+    default_size: int,
+    default_weight: FontWeight = FontWeight.REGULAR,
+    *,
+    scale: float = 1.0,
+) -> tuple[int, FontWeight]:
+    """Resolve one text role's font size and weight for a widget.
+
+    Reads the optional ``fonts`` widget key — a mapping of role name
+    to ``{"size": int, "weight": str}`` — and falls back to the
+    widget's own derived defaults.  A role with no explicit ``size``
+    is multiplied by ``scale`` (the display-level ``font_scale``);
+    an explicit size is absolute and never scaled, so a role pinned
+    to a pixel value stays put when the global scale changes.
+
+    Args:
+        widget: Widget config dict; may carry a ``fonts`` mapping.
+        role: Role name, e.g. ``"value"``, ``"name"``, ``"unit"``.
+        default_size: The widget's auto-derived pixel size for this
+            role, used when the role has no explicit size.
+        default_weight: The role's default weight, used when the
+            role has no explicit weight.
+        scale: Multiplier applied to ``default_size`` when the role
+            has no explicit size.
+
+    Returns:
+        ``(size, weight)`` — the resolved pixel size (>= 1) and the
+        resolved weight.  A missing or unrecognised ``weight`` falls
+        back to ``default_weight``; a non-numeric ``size`` falls back
+        to the scaled default.
+    """
+    fonts = widget.get("fonts")
+    entry = fonts.get(role) if isinstance(fonts, dict) else None
+    if not isinstance(entry, dict):
+        entry = {}
+    raw_size = entry.get("size")
+    if raw_size is None:
+        size = max(1, round(default_size * scale))
+    else:
+        try:
+            size = max(1, int(float(raw_size)))
+        except (TypeError, ValueError):
+            size = max(1, round(default_size * scale))
+    raw_weight = entry.get("weight")
+    if raw_weight is None:
+        weight = default_weight
+    else:
+        try:
+            weight = FontWeight(str(raw_weight))
+        except ValueError:
+            weight = default_weight
+    return size, weight
 
 
 def _fmt_temp(
@@ -217,13 +330,19 @@ def resolve_number_format(number_format: str, language: str) -> str:
     return NumberFormat.COMMA_DECIMAL
 
 
-def format_number(value: str, number_format: str, language: str) -> str:
+def format_number(
+    value: str,
+    number_format: str,
+    language: str,
+    precision: int | None = None,
+) -> str:
     """Format a numeric string according to the given locale settings.
 
     Non-numeric strings (e.g. ``"on"``, ``"off"``, ``"unavailable"``,
-    ``"--"``) are returned unchanged.  The number of decimal places
-    present in ``value`` is preserved so that ``"8.41"`` stays two
-    decimal places and ``"22"`` stays an integer.
+    ``"--"``) are returned unchanged.  When ``precision`` is not
+    given, the number of decimal places present in ``value`` is
+    preserved, capped at 1, so that ``"8.41"`` becomes one decimal
+    place and ``"22"`` stays an integer.
 
     Thousands grouping is applied for values ≥ 1000, matching HA's
     ``Intl.NumberFormat`` behaviour.
@@ -233,6 +352,9 @@ def format_number(value: str, number_format: str, language: str) -> str:
         number_format: A :class:`~const.NumberFormat` string value.
         language: BCP 47 language code used when ``number_format``
             is ``"language"``.
+        precision: Exact number of decimal places to show. When
+            ``None``, falls back to the default capped-at-1 rule.
+            Negative values are clamped to 0.
 
     Returns:
         Locale-formatted string, or ``value`` unchanged if not
@@ -243,13 +365,16 @@ def format_number(value: str, number_format: str, language: str) -> str:
     except (ValueError, TypeError):
         return value
 
-    # Cap at 1 decimal place — e-ink displays are small and extra
-    # precision is noise.  Raw HA state strings can have many trailing
-    # digits (e.g. "15.600000") that should not be shown.
-    decimal_places = min(
-        len(value.split(".")[1]) if "." in value else 0,
-        1,
-    )
+    if precision is not None:
+        decimal_places = max(precision, 0)
+    else:
+        # Cap at 1 decimal place — e-ink displays are small and extra
+        # precision is noise.  Raw HA state strings can have many
+        # trailing digits (e.g. "15.600000") that should not be shown.
+        decimal_places = min(
+            len(value.split(".")[1]) if "." in value else 0,
+            1,
+        )
 
     # Round via Python's float formatter so carry (e.g. 9.9995 → 10)
     # is handled correctly, then split on "." for grouping.
@@ -375,7 +500,7 @@ _BINARY_SENSOR_DEVICE_CLASS_ICONS: dict[str, tuple[str, str]] = {
 
 
 def _device_class_icon(
-    attrs: dict[str, Any],
+    attrs: Mapping[str, Any],
     state: str,
     domain: str = "",
 ) -> str | None:

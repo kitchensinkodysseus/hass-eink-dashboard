@@ -62,13 +62,21 @@ _COLOR_SCHEMES: dict[str, ColorScheme] = {
 }
 
 # Maps dither_algorithm config strings to epaper-dithering DitherMode.
-# Only the four algorithms exposed in the UI are included.
+# Only the algorithms exposed in the UI are included.  "none" maps each
+# pixel to the nearest palette color without error diffusion; on a
+# 2-level display that turns light grays (sRGB >= ~100) white.
 _DITHER_MODES: dict[str, DitherMode] = {
     "floyd_steinberg": DitherMode.FLOYD_STEINBERG,
     "atkinson": DitherMode.ATKINSON,
     "stucki": DitherMode.STUCKI,
     "burkes": DitherMode.BURKES,
+    "none": DitherMode.NONE,
 }
+
+# dither_algorithm value that bypasses the dithering library entirely
+# and produces a pure black/white image in which every non-white pixel
+# becomes black, so gray text and light dividers stay visible.
+DITHER_THRESHOLD = "threshold"
 
 # Maps measured_palette config strings to epaper-dithering ColorPalette
 # objects. "auto" is NOT a key here; it means "use the idealized
@@ -126,8 +134,13 @@ def optimize_for_eink(
             autocontrast is applied); 8 is reserved for future
             Inkplate support but is not offered in the UI),
             ``dither_algorithm`` (str, one of ``floyd_steinberg``,
-            ``atkinson``, ``stucki``, ``burkes``; default
-            ``floyd_steinberg``), ``measured_palette`` (str, one of
+            ``atkinson``, ``stucki``, ``burkes``, ``none``,
+            ``threshold``; default ``floyd_steinberg``; ``none`` maps
+            each pixel to the nearest palette color without error
+            diffusion; ``threshold`` skips dithering and
+            turns every non-white pixel black, producing a ``"1"``
+            image on the grayscale path whenever ``display_levels``
+            is below 256), ``measured_palette`` (str, one of
             the keys in ``_MEASURED_PALETTES`` or ``"auto"``; default
             ``"auto"``). When a non-auto measured palette is selected
             its calibrated ``ColorPalette`` is passed to
@@ -139,7 +152,8 @@ def optimize_for_eink(
     Returns:
         Processed PIL image. Mode is ``"RGB"`` for color schemes,
         ``"1"`` when ``display_levels`` maps to
-        ``ColorScheme.MONO``, ``"L"`` for all other grayscale
+        ``ColorScheme.MONO`` or ``dither_algorithm`` is ``threshold``,
+        ``"L"`` for all other grayscale
         schemes.
 
     Raises:
@@ -156,6 +170,21 @@ def optimize_for_eink(
     saturation = config.get("saturation", DEFAULT_SATURATION)
 
     algo = config.get("dither_algorithm", DEFAULT_DITHER_ALGORITHM)
+    color_scheme_key = config.get("color_scheme")
+    if algo == DITHER_THRESHOLD and color_scheme_key:
+        _LOGGER.warning(
+            "dither_algorithm 'threshold' is only supported on grayscale"
+            " displays; falling back to floyd_steinberg"
+        )
+        algo = DEFAULT_DITHER_ALGORITHM
+    if algo == DITHER_THRESHOLD:
+        if config.get("display_levels", DEFAULT_DISPLAY_LEVELS) >= 256:
+            return img
+        # Only pure white (255) stays white; anti-aliased edges and all
+        # gray shades become black.
+        return img.convert("L").point(
+            lambda p: 255 if p == 255 else 0, mode="1"
+        )
     if algo not in _DITHER_MODES:
         _LOGGER.warning(
             "Unknown dither_algorithm %r; falling back to floyd_steinberg",
@@ -178,7 +207,6 @@ def optimize_for_eink(
         )
 
     # Color e-ink path: dither to a specific color palette (BWR, etc.).
-    color_scheme_key = config.get("color_scheme")
     if color_scheme_key:
         scheme = _COLOR_SCHEMES.get(color_scheme_key)
         if scheme is None:

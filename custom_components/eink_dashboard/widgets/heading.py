@@ -21,19 +21,22 @@ from typing import TYPE_CHECKING, NamedTuple
 if TYPE_CHECKING:
     import markupsafe
 
+    from ..widget_config import HeadingWidget
+
 from ..const import (
     COLOR_GRAY,
     DEFAULT_CARD_STYLE,
     DEFAULT_ROW_H,
     PADDING,
     DisplayConfig,
-    Widget,
+    FontWeight,
     color_to_hex,
 )
 from ._helpers import (
     _card_insets,
     _color_context,
     _fmt,
+    _icon_stroke_width,
     _metrics_context,
     _resolve_icon_style,
     _resolve_icon_svg,
@@ -53,7 +56,7 @@ class _HeadingBadgeDatum(NamedTuple):
 
 
 def _build_heading_context(
-    widget: Widget,
+    widget: HeadingWidget,
     config: DisplayConfig,
 ) -> dict[str, object]:
     """Build Jinja2 template context for the heading widget.
@@ -64,9 +67,9 @@ def _build_heading_context(
 
     Heading style controls font size and fill:
 
-    - ``"title"`` — Roboto Medium at ``font_primary``, black fill
-      (default).
-    - ``"subtitle"`` — Roboto Regular at ``font_secondary``, gray
+    - ``"title"`` — regular-weight text at ``font_primary``, black
+      fill (default).
+    - ``"subtitle"`` — regular text at ``font_secondary``, gray
       fill.
 
     Icon style controls circle rendering:
@@ -100,9 +103,18 @@ def _build_heading_context(
             ``"outlined"``),
             ``badges`` (list of entity ID strings or badge config
             dicts),
+            ``fonts`` (per-role font overrides — a mapping of role
+            name to ``{"size": int, "weight": str}``; roles are
+            ``"heading"`` (the heading text) and ``"badge"`` (the
+            badge value text).  An omitted ``size`` keeps the
+            widget's derived size scaled by the display-level
+            ``font_scale``; an explicit ``size`` is absolute.  An
+            omitted ``weight`` keeps the role's default: heading
+            ``"medium"`` for the title style and ``"regular"`` for
+            the subtitle style, badge ``"regular"``),
             ``card_style``, ``x``, ``w``, ``h``.
-        config: Display config with ``width``, ``states``, and
-            ``display_levels``.
+        config: Display config with ``width``, ``states``,
+            ``display_levels``, and ``font_scale``.
 
     Returns:
         Template context dict consumed by ``heading.svg.j2``.
@@ -114,7 +126,9 @@ def _build_heading_context(
     """
     from ..render import (
         _compute_metrics,
-        _load_font,
+        _font_weight_svg,
+        _load_role_font,
+        resolve_font,
     )
 
     x = widget.get("x", PADDING)
@@ -129,6 +143,7 @@ def _build_heading_context(
     card_style = widget.get("card_style", DEFAULT_CARD_STYLE)
     states = config.get("states", {})
     display_levels = config.get("display_levels", 16)
+    font_scale: float = config.get("font_scale", 1.0)
 
     m = _compute_metrics(svg_h)
     x_off, r_inset, bar_width = _card_insets(m, card_style, display_levels)
@@ -136,11 +151,19 @@ def _build_heading_context(
     lpad = m.padding if x_off == 0 else 0
     rpad = m.padding if r_inset == 0 else 0
 
-    # Heading style: title (default) = large black;
-    # subtitle = small gray.
+    # Heading style: title (default) = large black at the medium
+    # weight; subtitle = small gray at the regular weight.  Both
+    # resolve through the shared API so the widget's ``fonts``
+    # overrides and the display-level ``font_scale`` apply.
     is_title = heading_style != "subtitle"
-    font_sz = m.font_primary if is_title else m.font_secondary
-    font_weight = "500" if is_title else "400"
+    font_sz, heading_weight = resolve_font(
+        widget,
+        "heading",
+        m.font_primary if is_title else m.font_secondary,
+        FontWeight.MEDIUM if is_title else FontWeight.REGULAR,
+        scale=font_scale,
+    )
+    font_weight = _font_weight_svg(heading_weight)
     colors = _color_context()
     text_fill = colors["hex_black"] if is_title else colors["hex_gray"]
 
@@ -148,9 +171,7 @@ def _build_heading_context(
     icon_outline, icon_no_circle = _resolve_icon_style(
         icon_style, display_levels=display_levels
     )
-    # Widen the outline stroke on 2-level displays to avoid
-    # dithering.
-    icon_stroke_w = m.border * 3 if display_levels <= 2 else m.border
+    icon_stroke_w = _icon_stroke_width(m.border, display_levels)
     glyph_sz = max(10, font_sz) if icon_no_circle else m.icon_inner
     icon_svg, _ = _resolve_icon_svg(
         icon_override,
@@ -188,9 +209,17 @@ def _build_heading_context(
 
     text_y = svg_h // 2
 
-    # Badge font and icon sizing.
-    badge_font_sz = m.font_secondary
-    badge_font = _load_font(badge_font_sz)
+    # Badge font and icon sizing.  The badge value text resolves
+    # through the shared API; the icon glyph tracks the resolved
+    # size so both stay visually matched.
+    badge_font_sz, badge_weight = resolve_font(
+        widget,
+        "badge",
+        m.font_secondary,
+        FontWeight.REGULAR,
+        scale=font_scale,
+    )
+    badge_font = _load_role_font(badge_font_sz, badge_weight)
     badge_icon_sz = badge_font_sz
 
     # Resolve badge states and compute widths.
@@ -285,7 +314,7 @@ def _build_heading_context(
         text_anchor = "end"
         text_x = badge_right
         if heading_text:
-            heading_font = _load_font(font_sz, medium=is_title)
+            heading_font = _load_role_font(font_sz, heading_weight)
             text_w = round(heading_font.getlength(heading_text))
             text_x = max(text_x - text_w, min_text_x) + text_w
 
@@ -330,4 +359,5 @@ def _build_heading_context(
         # Badges (pre-positioned, empty list when none fit).
         "badges": rendered_badges,
         "badge_font_sz": badge_font_sz,
+        "badge_font_weight": _font_weight_svg(badge_weight),
     }

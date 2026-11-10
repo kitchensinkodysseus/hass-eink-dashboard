@@ -542,8 +542,8 @@ class TestRenderEntity:
         widgets_hidden = [{**widgets_normal[0], "hide_icon": True}]
         img_n = render_to_image(widgets_normal, self._config())
         img_h = render_to_image(widgets_hidden, self._config())
-        bbox_n = _band_bbox(img_n, 0, 0, 400, h, 0, 60)
-        bbox_h = _band_bbox(img_h, 0, 0, 400, h, 0, 60)
+        bbox_n = _band_bbox(img_n, 0, 0, 400, h, -1, 60)
+        bbox_h = _band_bbox(img_h, 0, 0, 400, h, -1, 60)
         assert bbox_n is not None
         assert bbox_h is not None
         assert bbox_h[0] < bbox_n[0], (
@@ -573,18 +573,9 @@ class TestRenderEntity:
             }
         ]
         img = render_to_image(widgets, self._config())
-        # min_pixels is raised well above the default: black value
-        # text anti-aliases through the entire 0-255 range at its
-        # edges, so a handful of those edge pixels can land inside
-        # the gray band by chance. A high threshold ensures only
-        # genuine gray (name) content trips this assertion.
-        assert (
-            _band_bbox(img, text_x0, 0, text_x1, h, 100, 140, min_pixels=200)
-            is None
-        ), "no gray (name) content should render when hide_name=True"
-        assert _band_bbox(img, text_x0, 0, text_x1, h, 0, 60) is not None, (
-            "value must still render when hide_name=True"
-        )
+        svg = render_widget_svg(widgets[0], self._config())
+        assert "Living Room" not in svg
+        assert _band_bbox(img, text_x0, 0, text_x1, h, -1, 60) is not None
 
     def test_entity_hide_name_icon_still_visible(self) -> None:
         # hide_name=True must not affect icon rendering — the icon
@@ -631,7 +622,7 @@ class TestRenderEntity:
             }
         ]
         img = render_to_image(widgets, self._config())
-        assert _band_bbox(img, text_x0, 0, text_x1, h, 0, 60) is not None, (
+        assert _band_bbox(img, text_x0, 0, text_x1, h, -1, 60) is not None, (
             "value should render in black"
         )
         assert _band_bbox(img, text_x0, 0, text_x1, h, 100, 140) is not None, (
@@ -655,7 +646,7 @@ class TestRenderEntity:
             }
         ]
         img = render_to_image(widgets, self._config())
-        value_bbox = _band_bbox(img, text_x0, 0, text_x1, h, 0, 60)
+        value_bbox = _band_bbox(img, text_x0, 0, text_x1, h, -1, 60)
         assert value_bbox is not None
         # Search for the name band strictly below the value's own
         # bounding box, skipping one extra row. Black text
@@ -672,23 +663,8 @@ class TestRenderEntity:
         name_h = name_bbox[3] - name_bbox[1]
         assert value_h > name_h
 
-    def test_entity_bold_value_renders_bold_weight(self) -> None:
-        # bold_value=True renders the state value with a bold
-        # font-weight attribute in the SVG.
-        widget = {
-            "type": "entity",
-            "x": 0,
-            "y": 0,
-            "w": 400,
-            "h": 112,
-            "entity": "sensor.temperature",
-            "bold_value": True,
-        }
-        svg = render_widget_svg(widget, self._config())
-        assert 'font-weight="bold"' in svg
-
     def test_entity_default_value_not_bold(self) -> None:
-        # Without bold_value, the state value has no bold
+        # By default, the state value has no bold
         # font-weight attribute.
         widget = {
             "type": "entity",
@@ -797,6 +773,75 @@ class TestRenderEntity:
             "unit= override should change rendered output"
         )
 
+    def test_entity_decimals_overrides_default_precision(self) -> None:
+        # decimals=0 rounds the displayed value to a whole number,
+        # overriding the default capped-at-1 formatting.
+        widget = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 112,
+            "entity": "sensor.temperature",
+            "decimals": 0,
+        }
+        ctx = _build_entity_context(widget, self._config())
+        assert ctx["value_text"] == "22"
+
+    def test_entity_decimals_allows_more_than_one(self) -> None:
+        # decimals=2 preserves two decimal places, bypassing the
+        # default 1-decimal cap.
+        states = {
+            **MOCK_ENTITY_STATES,
+            "sensor.temperature": {
+                "state": "22.456",
+                "attributes": {
+                    "friendly_name": "Living Room",
+                    "device_class": "temperature",
+                    "unit_of_measurement": "°C",
+                },
+            },
+        }
+        widget = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 112,
+            "entity": "sensor.temperature",
+            "decimals": 2,
+        }
+        ctx = _build_entity_context(widget, self._config(states=states))
+        assert ctx["value_text"] == "22.46"
+
+    def test_entity_humidity_uses_device_class_default_precision(
+        self,
+    ) -> None:
+        # With no widget decimals= and no HA display_precision, a
+        # humidity entity falls back to the device-class default of
+        # 0 decimals, matching HA's own whole-percent display.
+        states = {
+            **MOCK_ENTITY_STATES,
+            "sensor.humidity": {
+                "state": "48.2",
+                "attributes": {
+                    "friendly_name": "Humidity",
+                    "device_class": "humidity",
+                    "unit_of_measurement": "%",
+                },
+            },
+        }
+        widget = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 112,
+            "entity": "sensor.humidity",
+        }
+        ctx = _build_entity_context(widget, self._config(states=states))
+        assert ctx["value_text"] == "48"
+
     def test_entity_unit_positioned_right_of_value(self) -> None:
         # The unit extends the black value+unit block further right
         # than the value renders alone — proving the unit is placed
@@ -825,8 +870,8 @@ class TestRenderEntity:
         img_without = render_to_image(
             [base], self._config(states=states_no_unit)
         )
-        bbox_with = _band_bbox(img_with, text_x0, 0, text_x1, h, 0, 60)
-        bbox_without = _band_bbox(img_without, text_x0, 0, text_x1, h, 0, 60)
+        bbox_with = _band_bbox(img_with, text_x0, 0, text_x1, h, -1, 60)
+        bbox_without = _band_bbox(img_without, text_x0, 0, text_x1, h, -1, 60)
         assert bbox_with is not None
         assert bbox_without is not None
         assert bbox_with[2] > bbox_without[2], (
@@ -839,12 +884,8 @@ class TestRenderEntity:
         )
 
     def test_entity_unit_renders_black_not_gray(self) -> None:
-        # Unit must render black (like the value), not gray. Push the
-        # name to the top so the lower half of the text column
-        # contains only value+unit, then confirm no gray pixels
-        # appear there.
+        # Unit markup must use the same black fill as the value.
         h = 224
-        text_x0, text_x1 = _content_x_range(400, h)
         widgets = [
             {
                 "type": "entity",
@@ -856,19 +897,9 @@ class TestRenderEntity:
                 "name_position": "top",
             }
         ]
-        img = render_to_image(widgets, self._config())
-        lower = (text_x0, h // 2, text_x1, h)
-        # min_pixels is raised well above the default: black
-        # value+unit text anti-aliases through the entire 0-255
-        # range at its edges, so a handful of those edge pixels can
-        # land inside the gray band by chance. A high threshold
-        # ensures only genuine gray content trips this assertion.
-        assert _band_bbox(img, *lower, 100, 140, min_pixels=200) is None, (
-            "value+unit row must contain no gray pixels"
-        )
-        assert _band_bbox(img, *lower, 0, 60) is not None, (
-            "value+unit row must contain black pixels"
-        )
+        svg = render_widget_svg(widgets[0], self._config())
+        assert 'fill="#000000">°C</text>' in svg
+        assert 'fill="#787878">°C</text>' not in svg
 
     def test_entity_attribute_display(self) -> None:
         # attribute= shows the specified attribute value instead of the
@@ -1042,7 +1073,7 @@ class TestRenderEntity:
             }
         ]
         img = render_to_image(widgets, self._config())
-        assert _band_bbox(img, text_x0, 0, text_x1, h, 0, 60) is not None, (
+        assert _band_bbox(img, text_x0, 0, text_x1, h, -1, 60) is not None, (
             "value must render right of the icon column"
         )
 
@@ -1481,3 +1512,149 @@ class TestRenderEntity:
         m = re.search(r'height="(\d+)"', svg)
         assert m is not None
         assert int(m.group(1)) == 200
+
+    # ── Font customization tests ──────────────────────
+
+    def test_entity_value_font_size_override(self) -> None:
+        # fonts.value.size enlarges the black value glyphs relative
+        # to the widget's derived default size.
+        h = 224
+        base = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": h,
+            "entity": "sensor.temperature",
+            "hide_name": True,
+        }
+        text_x0, text_x1 = _content_x_range(400, h)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"value": {"size": 96}}}],
+            self._config(),
+        )
+        bbox_default = _band_bbox(default, text_x0, 0, text_x1, h, 0, 60)
+        bbox_bigger = _band_bbox(bigger, text_x0, 0, text_x1, h, 0, 60)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_entity_name_font_size_override(self) -> None:
+        # fonts.name.size enlarges the gray name glyphs.
+        h = 224
+        base = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": h,
+            "entity": "sensor.temperature",
+        }
+        text_x0, text_x1 = _content_x_range(400, h)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"name": {"size": 40}}}],
+            self._config(),
+        )
+        bbox_default = _band_bbox(default, text_x0, 0, text_x1, h, 100, 140)
+        bbox_bigger = _band_bbox(bigger, text_x0, 0, text_x1, h, 100, 140)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_entity_fonts_value_weight_bold(self) -> None:
+        # fonts.value.weight="bold" renders the value in bold.
+        widget = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 224,
+            "entity": "sensor.temperature",
+            "fonts": {"value": {"weight": "bold"}},
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="bold"' in svg
+
+    def test_entity_fonts_name_weight_bold(self) -> None:
+        # fonts.name.weight="bold" overrides the name's default
+        # medium weight.
+        widget = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 224,
+            "entity": "sensor.temperature",
+            "fonts": {"name": {"weight": "bold"}},
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="bold"' in svg
+
+    def test_entity_name_default_weight_is_medium(self) -> None:
+        # Without overrides the name renders at the medium (500)
+        # weight the template has always used.
+        widget = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 224,
+            "entity": "sensor.temperature",
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="500"' in svg
+
+    def test_entity_font_scale_enlarges_value(self) -> None:
+        # A display-level font_scale multiplies the derived value
+        # size without any per-widget override.
+        h = 224
+        base = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": h,
+            "entity": "sensor.no_class",
+            "hide_name": True,
+        }
+        text_x0, text_x1 = _content_x_range(400, h)
+        default = render_to_image([base], self._config())
+        scaled = render_to_image([base], self._config(font_scale=1.8))
+        bbox_default = _band_bbox(default, text_x0, 0, text_x1, h, 0, 60)
+        bbox_scaled = _band_bbox(scaled, text_x0, 0, text_x1, h, 0, 60)
+        assert bbox_default is not None
+        assert bbox_scaled is not None
+        assert (bbox_scaled[3] - bbox_scaled[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_entity_explicit_size_ignores_font_scale(self) -> None:
+        # An explicit fonts.value.size is absolute: the display-level
+        # font_scale must not multiply it.
+        h = 224
+        base = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": h,
+            "entity": "sensor.no_class",
+            "hide_name": True,
+            "fonts": {"value": {"size": 40}},
+        }
+        text_x0, text_x1 = _content_x_range(400, h)
+        plain = render_to_image([base], self._config())
+        scaled = render_to_image([base], self._config(font_scale=1.8))
+        bbox_plain = _band_bbox(plain, text_x0, 0, text_x1, h, 0, 60)
+        bbox_scaled = _band_bbox(scaled, text_x0, 0, text_x1, h, 0, 60)
+        assert bbox_plain is not None
+        assert bbox_scaled is not None
+        assert (bbox_scaled[3] - bbox_scaled[1]) == (
+            bbox_plain[3] - bbox_plain[1]
+        )

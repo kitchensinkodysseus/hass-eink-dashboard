@@ -27,25 +27,41 @@ dependencies: ``render.py`` → ``svg_render.py`` → ``widgets/`` →
 from __future__ import annotations
 
 import contextlib
+import datetime
 import functools
+import zoneinfo
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
-from typing import TYPE_CHECKING
+from itertools import pairwise
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     import markupsafe
 
     from ..render import WidgetMetrics
+    from ..widget_config import (
+        DecimalsFields,
+        EntityFields,
+        EntityInfoWidget,
+        IconFields,
+        InvertFields,
+        ListFields,
+        WidgetBase,
+    )
 
+from ..conditions import check_conditions
 from ..const import (
     COLOR_BLACK,
     COLOR_GRAY,
     COLOR_LIGHT_GRAY,
     COLOR_WHITE,
     DEFAULT_CARD_STYLE,
+    DEFAULT_DIVIDER_W,
     DEFAULT_ROW_H,
     DisplayConfig,
-    Widget,
+    FontWeight,
     color_to_hex,
 )
 from ..svg_render import _mdi_svg_filter
@@ -86,6 +102,23 @@ def _title_layout(
     font_sz = max(10, round(svg_h * 0.14))
     advance = round(font_sz * 1.4)
     return font_sz, advance, svg_h - advance
+
+
+def _missing_entity_context(w: int, h: int) -> dict[str, object]:
+    """Return the blank-canvas context for a widget with no entity.
+
+    Entity-based templates wrap their content in ``{% if has_entity %}``
+    so this context renders an empty, correctly sized SVG.
+
+    Args:
+        w: Widget width in pixels.
+        h: Widget height in pixels.
+
+    Returns:
+        Dict with ``w``, ``h``, ``has_entity=False``, and the
+        ``_color_context()`` hex variables.
+    """
+    return {"w": w, "h": h, "has_entity": False, **_color_context()}
 
 
 def _metrics_context(m: WidgetMetrics) -> dict[str, object]:
@@ -130,7 +163,162 @@ def _color_context() -> dict[str, str]:
     }
 
 
-def _fmt(value: str, config: DisplayConfig) -> str:
+_HEX_BLACK = color_to_hex(COLOR_BLACK)
+
+
+@dataclass(frozen=True, slots=True)
+class CardRow:
+    """Per-row data for one ``card_row`` macro call in a list widget.
+
+    Mirrors the row-specific parameters of ``card_row`` in
+    ``_macros.svg.j2``; shared geometry (row height, insets, fonts)
+    stays in the widget-level context.  Serialise with
+    ``_row_context()`` before placing it in a template's ``rows``.
+
+    Attributes:
+        y: Top edge of the row in absolute SVG coordinates.
+        primary: Main label text.
+        icon_fill: Hex fill color of a solid icon circle.
+        secondary: Sub-label below ``primary``; empty for a
+            single-line row.
+        value: Right-aligned value text; empty omits it.
+        icon_svg: Pre-built icon SVG string; empty falls back to
+            ``letter``.
+        icon_outline: Draw a white circle with a black stroke
+            instead of a solid ``icon_fill`` circle.
+        icon_no_circle: Hide the circle and draw only the glyph.
+        letter: Fallback glyph drawn in the circle when
+            ``icon_svg`` is empty.
+        secondary_fill: Hex color of the secondary text.
+        value_fill: Hex color of the value text.
+    """
+
+    y: int
+    primary: str
+    icon_fill: str
+    secondary: str = ""
+    value: str = ""
+    icon_svg: str = ""
+    icon_outline: bool = False
+    icon_no_circle: bool = False
+    letter: str = ""
+    secondary_fill: str = _HEX_BLACK
+    value_fill: str = _HEX_BLACK
+
+
+def _row_context(row: CardRow) -> dict[str, object]:
+    """Return ``row`` as a dict for a template's ``rows`` list."""
+    return {f.name: getattr(row, f.name) for f in dc_fields(row)}
+
+
+def _resolve_tz(config: DisplayConfig) -> datetime.tzinfo:
+    """Return the display time zone from ``config``, defaulting to UTC.
+
+    ``time_zone`` holds HA's configured IANA zone name.  Missing or
+    unknown names fall back to UTC so rendering never fails.
+
+    Args:
+        config: Display config dict, optionally containing a
+            ``time_zone`` key with an IANA zone name (e.g.
+            ``"Europe/Berlin"``).
+
+    Returns:
+        ``zoneinfo.ZoneInfo`` for the configured zone, or
+        ``datetime.UTC`` when ``time_zone`` is missing, empty, or
+        not a recognised IANA name.
+    """
+    name = config.get("time_zone")
+    if name:
+        try:
+            return zoneinfo.ZoneInfo(str(name))
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+            pass
+    return datetime.UTC
+
+
+# Temperature (°C) -> RGB color stops, sorted ascending by
+# temperature.  Shared by the weather widget's today min/max bar
+# and (eventually) the meteogram's temperature curve, so both use
+# the same color language for the same reading.
+_TEMP_GRADIENT: list[tuple[float, tuple[int, int, int]]] = [
+    (-20, (0, 60, 98)),
+    (-10, (120, 162, 204)),
+    (0, (164, 195, 210)),
+    (10, (121, 210, 179)),
+    (20, (252, 245, 112)),
+    (30, (255, 150, 79)),
+    (40, (255, 192, 159)),
+]
+
+
+def _temp_to_rgb(temp: float) -> tuple[int, int, int]:
+    """Map a temperature to an RGB color via linear interpolation.
+
+    Temperatures outside ``_TEMP_GRADIENT``'s range clamp to the
+    nearest end color.
+
+    Args:
+        temp: Temperature in Celsius.
+
+    Returns:
+        ``(r, g, b)`` tuple, each in ``0..255``.
+    """
+    stops = _TEMP_GRADIENT
+    if temp <= stops[0][0]:
+        return stops[0][1]
+    if temp >= stops[-1][0]:
+        return stops[-1][1]
+    for (t0, c0), (t1, c1) in pairwise(stops):
+        if t0 <= temp <= t1:
+            frac = (temp - t0) / (t1 - t0)
+            return (
+                round(c0[0] + (c1[0] - c0[0]) * frac),
+                round(c0[1] + (c1[1] - c0[1]) * frac),
+                round(c0[2] + (c1[2] - c0[2]) * frac),
+            )
+    return stops[-1][1]
+
+
+def _temp_gradient_stops(values: list[float]) -> list[dict[str, str]]:
+    """Compute SVG linearGradient stop entries from temperatures.
+
+    Each value maps to an evenly-spaced offset (``"0.00%"`` for the
+    first entry, ``"100.00%"`` for the last) and a color from
+    ``_temp_to_rgb()``.  Mirrors the ``{"offset": ..., "color":
+    ...}`` shape ``graph/colors.py``'s ``_threshold_gradient_stops()``
+    returns, so templates can loop over either the same way.
+
+    Args:
+        values: Temperatures sampled at even intervals across the
+            gradient's extent.  Must have at least two entries.
+
+    Returns:
+        List of ``{"offset": "XX.XX%", "color": "#hex"}`` dicts,
+        ordered start to end of the gradient.
+
+    Raises:
+        ValueError: If ``values`` has fewer than two entries.
+    """
+    if len(values) < 2:
+        raise ValueError(f"values must have >= 2 entries, got {len(values)}")
+    n = len(values) - 1
+    stops: list[dict[str, str]] = []
+    for i, temp in enumerate(values):
+        r, g, b = _temp_to_rgb(temp)
+        stops.append(
+            {
+                "offset": f"{i / n * 100:.2f}%",
+                "color": f"#{r:02x}{g:02x}{b:02x}",
+            }
+        )
+    return stops
+
+
+def _fmt(
+    value: str,
+    config: DisplayConfig,
+    precision: int | None = None,
+) -> str:
     """Format a numeric string using the locale settings in ``config``.
 
     Non-numeric strings pass through unchanged.  Extracts
@@ -141,6 +329,9 @@ def _fmt(value: str, config: DisplayConfig) -> str:
         value: Numeric string (e.g. ``"8.41"``).
         config: Display config dict containing ``number_format`` and
             ``language`` keys.
+        precision: Exact number of decimal places to show. When
+            ``None``, falls back to :func:`~render.format_number`'s
+            default capped-at-1 rule.
 
     Returns:
         Locale-formatted string, or ``value`` unchanged if not
@@ -152,7 +343,106 @@ def _fmt(value: str, config: DisplayConfig) -> str:
         value,
         config.get("number_format", "language"),
         config.get("language", "en"),
+        precision,
     )
+
+
+# Device classes with a sensible default decimal count differing from
+# the general capped-at-1 fallback. Humidity sensors are commonly
+# reported with spurious sub-percent precision (e.g. "48.2") that
+# users find noisier than the whole-percent value shown in HA's own
+# UI by default.
+_DEVICE_CLASS_DEFAULT_PRECISION: dict[str, int] = {"humidity": 0}
+
+
+def _resolve_precision(
+    widget: DecimalsFields,
+    state: dict[str, Any] | None,
+) -> int | None:
+    """Resolve the decimal precision to display for a widget's value.
+
+    Priority order:
+
+    1. The widget's own ``decimals`` config (explicit override).
+    2. The entity's HA ``display_precision``, injected into ``state``
+       by state enrichment from the entity registry.
+    3. A device-class default (see
+       :data:`_DEVICE_CLASS_DEFAULT_PRECISION`).
+    4. ``None``, meaning callers should fall back to
+       :func:`~render.format_number`'s default capped-at-1 rule.
+
+    Args:
+        widget: Widget config dict, checked for a ``decimals`` key.
+        state: Entity state dict from ``config["states"]``, checked
+            for ``display_precision`` and ``attributes.device_class``.
+            May be ``None`` for a missing entity.
+
+    Returns:
+        The resolved precision, or ``None`` to use the default rule.
+    """
+    decimals = widget.get("decimals")
+    if decimals is not None:
+        try:
+            return int(decimals)
+        except (ValueError, TypeError):
+            pass
+    if state is not None:
+        display_precision = state.get("display_precision")
+        if display_precision is not None:
+            try:
+                return int(display_precision)
+            except (ValueError, TypeError):
+                pass
+        attrs = state.get("attributes", {})
+        device_class = attrs.get("device_class")
+        if isinstance(device_class, str):
+            default = _DEVICE_CLASS_DEFAULT_PRECISION.get(device_class)
+            if default is not None:
+                return default
+    return None
+
+
+def _format_value_unit(
+    state_val: str,
+    attrs: Mapping[str, Any],
+    config: DisplayConfig,
+    precision: int | None,
+    attribute: str | None,
+    unit_override: object,
+) -> tuple[str, str]:
+    """Format an entity's display value and unit strings.
+
+    Shows an attribute's value instead of the entity state when
+    ``attribute`` is given, falling back to ``"unknown"`` when that
+    attribute is absent or empty.
+
+    Args:
+        state_val: The entity's raw state string.
+        attrs: The entity's ``attributes`` dict.
+        config: Display config, passed through to :func:`_fmt`.
+        precision: Exact decimal places to show, or ``None`` for
+            :func:`_fmt`'s default capped-at-1 rule.
+        attribute: HA attribute key to display instead of state, or
+            ``None`` to use the entity state.
+        unit_override: Widget-configured unit override, or ``None``
+            to auto-detect ``unit_of_measurement`` from ``attrs``.
+
+    Returns:
+        A ``(value_text, unit_text)`` tuple.
+    """
+    if attribute is not None:
+        raw_val = attrs.get(attribute)
+        value_text = (
+            _fmt(str(raw_val), config, precision)
+            if raw_val is not None and raw_val != ""
+            else "unknown"
+        )
+        auto_unit = ""
+    else:
+        value_text = _fmt(state_val, config, precision)
+        auto_unit = attrs.get("unit_of_measurement", "")
+    unit_text = str(unit_override) if unit_override is not None else auto_unit
+    return value_text, unit_text
 
 
 def _card_insets(
@@ -233,7 +523,7 @@ def _resolve_icon_style(
 
 def _resolve_icon_svg(
     icon_override: str | None,
-    attrs: dict[str, object],
+    attrs: Mapping[str, object],
     state_val: str,
     domain: str,
     size: int,
@@ -310,7 +600,174 @@ def _resolve_icon_svg(
     return icon_svg, letter
 
 
-def _widget_dim(widget: Widget, key: str, fallback: int) -> int:
+def _icon_stroke_width(border: int, display_levels: int) -> int:
+    """Return the icon circle outline width for a display.
+
+    The outline is widened threefold on 2-level displays: a thin
+    stroke would otherwise be anti-aliased to gray and dithered
+    into a broken dot pattern.
+
+    Args:
+        border: Base border width in pixels (WidgetMetrics.border).
+        display_levels: Display grayscale depth.
+
+    Returns:
+        Stroke width in pixels.
+    """
+    return border * 3 if display_levels <= 2 else border
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEntity:
+    """The HA entity a single-entity widget displays.
+
+    Attributes:
+        entity_id: Full entity ID, e.g. ``"sensor.temp"``.
+        attrs: The state's ``attributes`` dict.
+        domain: Entity domain, e.g. ``"sensor"``.
+        state_val: Raw state string, e.g. ``"21.5"`` or ``"on"``.
+        name: Display name: the widget's ``name`` override, else the
+            entity's ``friendly_name``, else ``entity_id``.
+        precision: Decimal places to show, or ``None`` for the
+            default rule (see ``_resolve_precision``).
+    """
+
+    entity_id: str
+    attrs: Mapping[str, Any]
+    domain: str
+    state_val: str
+    name: str
+    precision: int | None
+
+
+def _resolve_entity(
+    widget: EntityFields, config: DisplayConfig
+) -> ResolvedEntity | None:
+    """Look up the widget's ``entity`` in the display states.
+
+    Args:
+        widget: Widget config dict; reads ``entity``, ``name`` and
+            ``decimals``.
+        config: Display config; reads ``states``.
+
+    Returns:
+        The resolved entity, or ``None`` when ``entity`` is unset or
+        absent from ``states`` (callers then return
+        ``_missing_entity_context()``).
+    """
+    entity_id = str(widget.get("entity") or "")
+    state = config.get("states", {}).get(entity_id) if entity_id else None
+    if state is None:
+        return None
+    attrs = state.get("attributes", {})
+    name_override = widget.get("name")
+    return ResolvedEntity(
+        entity_id=entity_id,
+        attrs=attrs,
+        domain=entity_id.split(".")[0],
+        state_val=state.get("state", ""),
+        name=(
+            str(name_override)
+            if name_override is not None
+            else attrs.get("friendly_name", entity_id)
+        ),
+        precision=_resolve_precision(widget, state),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EntityIcon:
+    """Resolved icon glyph and circle style for an entity widget.
+
+    Attributes:
+        svg: Inline SVG of the glyph; empty when hidden or when no
+            icon resolves.
+        letter: Uppercase fallback letter drawn when ``svg`` is
+            empty; empty when hidden or when an icon resolved.
+        outline: Draw the circle as an outline.
+        no_circle: Draw the bare glyph without a circle.
+    """
+
+    svg: markupsafe.Markup | str
+    letter: str
+    outline: bool
+    no_circle: bool
+
+
+def _resolve_entity_icon(
+    widget: IconFields,
+    entity: ResolvedEntity,
+    icon_inner: int,
+    display_levels: int,
+    *,
+    invert: bool = False,
+) -> EntityIcon:
+    """Resolve the icon of a single-entity widget.
+
+    Applies the widget's ``hide_icon``, ``icon`` and ``icon_style``
+    keys on top of ``_resolve_icon_svg`` and ``_resolve_icon_style``.
+
+    Args:
+        widget: Widget config dict.
+        entity: The entity the icon represents.
+        icon_inner: Glyph size in pixels.
+        display_levels: Display grayscale depth.
+        invert: The widget renders inverted (see
+            ``_resolve_invert``).  Forces the flat, no-circle style
+            so the glyph draws cleanly on the black background.
+
+    Returns:
+        The glyph and circle style flags for the template.
+    """
+    if widget.get("hide_icon", False):
+        return EntityIcon(svg="", letter="", outline=False, no_circle=True)
+    svg, letter = _resolve_icon_svg(
+        widget.get("icon"),
+        entity.attrs,
+        entity.state_val,
+        entity.domain,
+        icon_inner,
+        entity.entity_id,
+    )
+    if invert:
+        return EntityIcon(
+            svg=svg, letter=letter, outline=False, no_circle=True
+        )
+    outline, no_circle = _resolve_icon_style(
+        widget.get("icon_style"), entity.state_val, display_levels
+    )
+    return EntityIcon(
+        svg=svg, letter=letter, outline=outline, no_circle=no_circle
+    )
+
+
+def _resolve_invert(widget: InvertFields, states: dict[str, Any]) -> bool:
+    """Return whether the widget's ``invert_condition`` is met.
+
+    The inverted rendering (solid black card, white text/icon) is an
+    e-ink "needs attention" signal.  It uses the same condition
+    format and evaluator as ``visibility``.
+
+    Args:
+        widget: Widget config dict; reads ``invert_condition``.
+        states: HA entity ID to state dict mapping.
+
+    Returns:
+        ``True`` when ``invert_condition`` is non-empty and all its
+        conditions are met.
+    """
+    invert_condition = widget.get("invert_condition")
+    # check_conditions([]) returns True, so an absent or empty
+    # invert_condition must be rejected first — it must never invert
+    # the widget.
+    return bool(invert_condition) and check_conditions(
+        invert_condition, states
+    )
+
+
+def _widget_dim(
+    widget: WidgetBase, key: Literal["w", "h"], fallback: int
+) -> int:
     """Return a widget dimension, clamped to >= 1.
 
     Uses the explicit ``widget[key]`` value when present,
@@ -327,6 +784,66 @@ def _widget_dim(widget: Widget, key: str, fallback: int) -> int:
         Dimension in pixels, >= 1.
     """
     return max(1, widget.get(key, fallback))
+
+
+def _max_row_height(widget: ListFields, config: DisplayConfig) -> int:
+    """Return the maximum list row height for a widget.
+
+    Reads the widget's ``row_height`` (pixels), falling back to the
+    display's density-scaled ``row_height`` from ``config`` and then
+    to ``DEFAULT_ROW_H``; clamped to >= 1.
+
+    Args:
+        widget: List widget config dict.
+        config: Display config; ``row_height`` is the per-device
+            default from :func:`const.default_list_row_height`.
+
+    Returns:
+        Maximum row height in pixels, >= 1.
+    """
+    row_h = widget.get("row_height") or config.get("row_height")
+    return max(1, int(row_h or DEFAULT_ROW_H))
+
+
+def _list_row_height(
+    content_h: int, num_rows: int, max_row_h: int = DEFAULT_ROW_H
+) -> int:
+    """Return the height of one row in a list widget.
+
+    Rows share ``content_h`` equally but never grow beyond
+    ``max_row_h``, so a tall widget with few rows stacks them at
+    the top instead of blowing them up.  Rows still shrink when the
+    content area is too small.
+
+    Args:
+        content_h: Height available for rows below the title.
+        num_rows: Number of rows to lay out (>= 1).
+        max_row_h: Maximum row height in pixels.
+
+    Returns:
+        Row height in pixels, >= 1.
+    """
+    return max(1, min(max_row_h, content_h // max(1, num_rows)))
+
+
+def _divider_stroke_width(widget: ListFields) -> int:
+    """Return the stroke width of the dividers between list rows.
+
+    Uses the widget's ``divider_width`` as a fixed pixel width on
+    every display, falling back to ``DEFAULT_DIVIDER_W`` (1 px).
+    ``0`` hides the dividers.
+
+    Args:
+        widget: Widget config dict; reads the optional
+            ``divider_width`` key.
+
+    Returns:
+        Divider stroke width in pixels, >= 0.
+    """
+    width = widget.get("divider_width")
+    if width is None:
+        return DEFAULT_DIVIDER_W
+    return max(0, int(width))
 
 
 def _auto_row_height(
@@ -384,23 +901,29 @@ class EntityTextGeometry:
 
     Attributes:
         name_font_sz: Font size for the entity name label.
+        name_weight: Resolved font weight for the name label.
         name_x: X coordinate for the name text anchor.
         name_y: Y coordinate for the name text anchor.
         value_font_sz: Font size for the state value.
+        value_weight: Resolved font weight for the state value.
         value_x: X coordinate for the value text anchor.
         value_y: Y coordinate for the value text anchor.
         unit_font_sz: Font size for the unit label.
+        unit_weight: Resolved font weight for the unit label.
         unit_x: X coordinate for the unit text anchor.
         unit_y: Y coordinate for the unit text anchor.
     """
 
     name_font_sz: int
+    name_weight: FontWeight
     name_x: int
     name_y: int
     value_font_sz: int
+    value_weight: FontWeight
     value_x: int
     value_y: int
     unit_font_sz: int
+    unit_weight: FontWeight
     unit_x: int
     unit_y: int
 
@@ -415,7 +938,8 @@ def _entity_text_geometry(
     *,
     value_text: str,
     unit_text: str,
-    value_bold: bool,
+    widget: WidgetBase | None = None,
+    scale: float = 1.0,
 ) -> EntityTextGeometry:
     """Compute name/value/unit font sizes and positions.
 
@@ -437,47 +961,70 @@ def _entity_text_geometry(
         unit_text: Rendered unit string. Empty string means no
             unit is shown, and ``unit_x`` falls back to
             ``value_x``.
-        value_bold: Whether the value is rendered in bold, which
-            changes the font used for measuring ``value_text``.
+        widget: Widget config dict, forwarded to ``resolve_font`` so
+            per-role ``fonts`` overrides apply. ``None`` disables
+            overrides (used by callers that only need defaults).
+        scale: Display-level ``font_scale`` multiplier applied to
+            derived sizes that have no explicit override.
 
     Returns:
-        ``EntityTextGeometry`` with font sizes and positions for
-        the name, value, and unit text elements.
+        ``EntityTextGeometry`` with font sizes, weights, and
+        positions for the name, value, and unit text elements.
     """
-    from ..render import _load_font
+    from ..render import _load_role_font, resolve_font
 
-    name_font_sz = max(10, round(header_h * 0.32))
+    source: WidgetBase = widget if widget is not None else {}
+    name_font_sz, name_weight = resolve_font(
+        source,
+        "name",
+        max(10, round(header_h * 0.32)),
+        FontWeight.MEDIUM,
+        scale=scale,
+    )
     name_x = x_off + lpad
     name_y = header_h // 2
 
-    value_font_sz = max(10, round(section_h * 0.38))
+    value_font_sz, value_weight = resolve_font(
+        source,
+        "value",
+        max(10, round(section_h * 0.38)),
+        FontWeight.REGULAR,
+        scale=scale,
+    )
     value_x = x_off + lpad
     value_y = header_h + round(info_h * 0.65)
 
-    unit_font_sz = m.font_secondary
+    unit_font_sz, unit_weight = resolve_font(
+        source,
+        "unit",
+        m.font_secondary,
+        FontWeight.REGULAR,
+        scale=scale,
+    )
     unit_x = value_x
     if unit_text:
-        value_font = _load_font(
-            value_font_sz, medium=not value_bold, bold=value_bold
-        )
+        value_font = _load_role_font(value_font_sz, value_weight)
         text_w = round(value_font.getlength(value_text))
         unit_x = value_x + text_w + m.inner_gap // 2
 
     return EntityTextGeometry(
         name_font_sz=name_font_sz,
+        name_weight=name_weight,
         name_x=name_x,
         name_y=name_y,
         value_font_sz=value_font_sz,
+        value_weight=value_weight,
         value_x=value_x,
         value_y=value_y,
         unit_font_sz=unit_font_sz,
+        unit_weight=unit_weight,
         unit_x=unit_x,
         unit_y=value_y,
     )
 
 
 def _entity_info_context(
-    widget: Widget,
+    widget: EntityInfoWidget,
     config: DisplayConfig,
     section_h: int,
     svg_w: int,
@@ -496,7 +1043,7 @@ def _entity_info_context(
         widget: Widget config dict.  Recognised keys: ``entity``,
             ``name``, ``icon``, ``unit``, ``hide_icon``,
             ``hide_name``, ``icon_style``, ``card_style``,
-            ``bold_value``.
+            ``fonts``, ``decimals``.
         config: Display config with ``states`` and
             ``display_levels``.
         section_h: Height of the entity info section in pixels.
@@ -513,22 +1060,15 @@ def _entity_info_context(
         section value/unit, card style, metrics, and colors.
         Returns ``None`` when the entity is missing from states.
     """
-    from ..render import _compute_metrics
+    from ..render import _compute_metrics, _font_weight_svg
 
-    entity_id: str = widget.get("entity", "")
-    name_override = widget.get("name")
-    icon_override = widget.get("icon")
     unit_override = widget.get("unit")
-    hide_icon: bool = widget.get("hide_icon", False)
     hide_name: bool = widget.get("hide_name", False)
-    icon_style = widget.get("icon_style")
     card_style = widget.get("card_style", DEFAULT_CARD_STYLE)
-    value_bold: bool = widget.get("bold_value", False)
-    states = config.get("states", {})
     display_levels = config.get("display_levels", 16)
 
-    state = states.get(entity_id) if entity_id else None
-    if state is None:
+    entity = _resolve_entity(widget, config)
+    if entity is None:
         return None
 
     colors = _color_context()
@@ -550,57 +1090,23 @@ def _entity_info_context(
     lpad = m.padding if x_off == 0 else 0
     rpad = m.padding if r_inset == 0 else 0
 
-    attrs = state.get("attributes", {})
-    domain = entity_id.split(".")[0]
-    state_val: str = state.get("state", "")
-
-    name_text: str = (
-        str(name_override)
-        if name_override is not None
-        else attrs.get("friendly_name", entity_id)
+    value_text, unit_text = _format_value_unit(
+        entity.state_val,
+        entity.attrs,
+        config,
+        entity.precision,
+        attribute,
+        unit_override,
     )
 
-    # Value: show attribute value when requested, else entity state.
-    if attribute is not None:
-        raw_val = attrs.get(attribute)
-        value_text = (
-            _fmt(str(raw_val), config)
-            if raw_val is not None and raw_val != ""
-            else "unknown"
-        )
-        auto_unit = ""
-    else:
-        value_text = _fmt(state_val, config)
-        auto_unit = attrs.get("unit_of_measurement", "")
-    unit_text: str = (
-        str(unit_override) if unit_override is not None else auto_unit
-    )
-
-    # Icon resolution: explicit override → device_class → attrs icon.
-    # Skipped entirely when hide_icon is set.
-    if hide_icon:
-        icon_svg: markupsafe.Markup | str = ""
-        letter = ""
-        icon_outline = False
-        icon_no_circle = True
-    else:
-        icon_svg, letter = _resolve_icon_svg(
-            icon_override,
-            attrs,
-            state_val,
-            domain,
-            icon_inner,
-            entity_id,
-        )
-        icon_outline, icon_no_circle = _resolve_icon_style(
-            icon_style, state_val, display_levels
-        )
-    # Widen outline stroke on 2-level displays to avoid dithering.
-    icon_stroke_w = m.border * 3 if display_levels <= 2 else m.border
+    # Sensor and Graph do not support invert_condition, so invert is
+    # deliberately not passed.
+    icon = _resolve_entity_icon(widget, entity, icon_inner, display_levels)
+    icon_stroke_w = _icon_stroke_width(m.border, display_levels)
     icon_fill = color_to_hex(COLOR_GRAY)
     icon_color = (
         colors["hex_black"]
-        if (icon_outline or icon_no_circle)
+        if (icon.outline or icon.no_circle)
         else colors["hex_white"]
     )
 
@@ -626,7 +1132,8 @@ def _entity_info_context(
         lpad,
         value_text=value_text,
         unit_text=unit_text,
-        value_bold=value_bold,
+        widget=widget,
+        scale=config.get("font_scale", 1.0),
     )
 
     return {
@@ -638,33 +1145,35 @@ def _entity_info_context(
         **_metrics_context(m),
         **colors,
         # Icon geometry.
-        "icon_svg": icon_svg,
+        "icon_svg": icon.svg,
         "icon_cx": icon_cx,
         "icon_cy": icon_cy,
         "icon_r": icon_r,
         "icon_stroke_w": icon_stroke_w,
         "icon_fill": icon_fill,
         "icon_color": icon_color,
-        "icon_outline": icon_outline,
-        "icon_no_circle": icon_no_circle,
+        "icon_outline": icon.outline,
+        "icon_no_circle": icon.no_circle,
         "icon_glyph_x": icon_glyph_x,
         "icon_glyph_y": icon_glyph_y,
-        "letter": letter,
+        "letter": icon.letter,
         "letter_font_sz": letter_font_sz,
         # Header row text.
         "hide_name": hide_name,
-        "name_text": name_text,
+        "name_text": entity.name,
         "name_x": geo.name_x,
         "name_y": geo.name_y,
         "name_font_sz": geo.name_font_sz,
+        "name_weight": _font_weight_svg(geo.name_weight),
         # Info section.
         "value_text": value_text,
         "value_x": geo.value_x,
         "value_y": geo.value_y,
         "value_font_sz": geo.value_font_sz,
-        "value_bold": value_bold,
+        "value_weight": _font_weight_svg(geo.value_weight),
         "unit_text": unit_text,
         "unit_x": geo.unit_x,
         "unit_y": geo.unit_y,
         "unit_font_sz": geo.unit_font_sz,
+        "unit_weight": _font_weight_svg(geo.unit_weight),
     }

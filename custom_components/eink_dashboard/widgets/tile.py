@@ -16,14 +16,15 @@
 
 from __future__ import annotations
 
-from ..conditions import check_conditions
+from typing import TYPE_CHECKING
+
 from ..const import (
     COLOR_GRAY,
     DEFAULT_CARD_STYLE,
     DEFAULT_ROW_H,
     PADDING,
     DisplayConfig,
-    Widget,
+    FontWeight,
     color_to_hex,
 )
 from ._helpers import (
@@ -31,15 +32,21 @@ from ._helpers import (
     _card_insets,
     _color_context,
     _fmt,
+    _icon_stroke_width,
     _metrics_context,
-    _resolve_icon_style,
-    _resolve_icon_svg,
+    _missing_entity_context,
+    _resolve_entity,
+    _resolve_entity_icon,
+    _resolve_invert,
     _widget_dim,
 )
 
+if TYPE_CHECKING:
+    from ..widget_config import TileWidget
+
 
 def _build_tile_context(
-    widget: Widget,
+    widget: TileWidget,
     config: DisplayConfig,
 ) -> dict[str, object]:
     """Build Jinja2 template context for the tile widget.
@@ -72,8 +79,19 @@ def _build_tile_context(
             ``state_content`` (attribute name or list; first element
             used when a list is provided),
             ``icon_style`` (``"filled"`` / ``"outlined"`` /
-            ``"none"``), ``bold_value`` (render the secondary
-            state line in bold; default ``False``), ``card_style``,
+            ``"none"``),
+            ``fonts`` (per-role font overrides — a mapping of role
+            name to ``{"size": int, "weight": str}``; roles are
+            ``"primary"`` (the entity name) and ``"secondary"``
+            (the state line).  An omitted ``size`` keeps the
+            widget's derived size scaled by the display-level
+            ``font_scale``; an explicit ``size`` is absolute.  An
+            omitted ``weight`` keeps the role's default: primary
+            ``"medium"``, secondary ``"regular"``),
+            ``decimals`` (exact number of decimal places to show;
+            overrides HA's ``display_precision`` and device-class
+            defaults),
+            ``card_style``,
             ``invert_condition`` (list of Lovelace condition dicts,
             same format as ``visibility``; when non-empty and all
             conditions are met the tile renders inverted — solid
@@ -84,8 +102,8 @@ def _build_tile_context(
 
     Returns:
         Template context dict consumed by ``tile.svg.j2``.
-        Returns ``{"w": …, "h": …, "has_entity": False}`` when
-        the entity is absent from ``states``.  Full context
+        Returns ``_missing_entity_context(w, h)`` when the
+        entity is absent from ``states``.  Full context
         includes: widget dimensions (``w``, ``h``), layout
         geometry (``row_h``, ``x_off``, ``r_inset``, ``lpad``,
         ``rpad``), metrics fields (``m_*`` prefix), color hex
@@ -93,35 +111,30 @@ def _build_tile_context(
         ``secondary``), icon data (``icon_svg``, ``letter``),
         and icon style flags (``icon_fill``, ``icon_outline``,
         ``icon_no_circle``), plus ``invert`` (whether the
-        ``invert_condition`` conditions were met).  The ``card_row``
-        ``value`` key is intentionally omitted — tiles have no
-        right-aligned value text; the macro defaults to ``""``.
+        ``invert_condition`` conditions were met), and the resolved
+        row text roles (``primary_font_sz``, ``primary_weight``,
+        ``secondary_font_sz``, ``secondary_weight``; the weights are
+        SVG ``font-weight`` strings).  The ``card_row`` ``value`` key
+        is intentionally omitted — tiles have no right-aligned value
+        text; the macro defaults to ``""``.
     """
-    from ..render import _compute_metrics
+    from ..render import _compute_metrics, _font_weight_svg, resolve_font
 
     x = widget.get("x", PADDING)
     svg_w = _widget_dim(widget, "w", config["width"] - x)
-    entity_id: str = widget.get("entity", "")
-    name_override = widget.get("name")
-    icon_override = widget.get("icon")
     hide_icon: bool = widget.get("hide_icon", False)
     hide_state: bool = widget.get("hide_state", False)
-    value_bold: bool = widget.get("bold_value", False)
+
     state_content = widget.get("state_content")
-    icon_style = widget.get("icon_style")
     card_style = widget.get("card_style", DEFAULT_CARD_STYLE)
-    states = config.get("states", {})
+    font_scale: float = config.get("font_scale", 1.0)
     display_levels = config.get("display_levels", 16)
 
-    state = states.get(entity_id) if entity_id else None
-    if state is None:
-        return {
-            "w": svg_w,
-            "h": _widget_dim(widget, "h", DEFAULT_ROW_H),
-            "has_entity": False,
-            "invert": False,
-            **_color_context(),
-        }
+    entity = _resolve_entity(widget, config)
+    if entity is None:
+        return _missing_entity_context(
+            svg_w, _widget_dim(widget, "h", DEFAULT_ROW_H)
+        )
 
     # Single row: row_h equals svg_h.  Kept as a separate
     # variable so card_row receives the same parameter name
@@ -135,15 +148,22 @@ def _build_tile_context(
     lpad = m.padding if x_off == 0 else 0
     rpad = m.padding if r_inset == 0 else 0
 
-    attrs = state.get("attributes", {})
-    domain = entity_id.split(".")[0] if entity_id else ""
-    state_val = state.get("state", "")
-
-    # Primary text: name override or entity friendly_name.
-    primary: str = (
-        str(name_override)
-        if name_override is not None
-        else attrs.get("friendly_name", entity_id)
+    # Row text roles resolve through the shared API so the widget's
+    # ``fonts`` overrides and the display-level ``font_scale`` apply.
+    # The tile renders its state line as card_row's secondary text.
+    primary_font_sz, primary_weight = resolve_font(
+        widget,
+        "primary",
+        m.font_primary,
+        FontWeight.MEDIUM,
+        scale=font_scale,
+    )
+    secondary_font_sz, secondary_weight = resolve_font(
+        widget,
+        "secondary",
+        m.font_secondary,
+        FontWeight.REGULAR,
+        scale=font_scale,
     )
 
     # Secondary text: attribute, default state+unit, or hidden.
@@ -155,52 +175,24 @@ def _build_tile_context(
             if isinstance(state_content, list) and state_content
             else (state_content if not isinstance(state_content, list) else "")
         )
-        secondary = _fmt(str(attrs.get(sc, "")), config) if sc else ""
+        secondary = (
+            _fmt(str(entity.attrs.get(sc, "")), config, entity.precision)
+            if sc
+            else ""
+        )
     else:
-        unit = attrs.get("unit_of_measurement", "")
-        fmtd = _fmt(state_val, config)
+        unit = entity.attrs.get("unit_of_measurement", "")
+        fmtd = _fmt(entity.state_val, config, entity.precision)
         secondary = f"{fmtd}{unit}" if unit else fmtd
 
-    # Icon: explicit override → device_class → letter fallback.
-    # Skipped entirely when hide_icon is set.
-    if hide_icon:
-        icon_svg = ""
-        letter = ""
-        icon_outline = False
-        icon_no_circle = True
-    else:
-        icon_svg, letter = _resolve_icon_svg(
-            icon_override,
-            attrs,
-            state_val,
-            domain,
-            m.icon_inner,
-            entity_id,
-        )
-        icon_outline, icon_no_circle = _resolve_icon_style(
-            icon_style, state_val, display_levels
-        )
+    invert = _resolve_invert(widget, config.get("states", {}))
+    icon = _resolve_entity_icon(
+        widget, entity, m.icon_inner, display_levels, invert=invert
+    )
     # Filled style always uses gray; state is conveyed by
     # icon_style (filled vs outlined), not fill colour.
     icon_fill = color_to_hex(COLOR_GRAY)
-    # Widen the outline stroke on 2-level displays to avoid
-    # dithering.
-    icon_stroke_w = m.border * 3 if display_levels <= 2 else m.border
-
-    # Inverted "needs attention" signal: same condition format and
-    # evaluator as `visibility`, but drives a solid black card with
-    # white text/icon instead of hide/show.  `check_conditions([])`
-    # returns True, so the emptiness check is required — an absent
-    # or empty `invert_condition` must never invert the tile.  The
-    # icon is forced to the flat, no-circle style so the glyph draws
-    # cleanly on the black background.
-    invert_condition = widget.get("invert_condition")
-    invert = bool(invert_condition) and check_conditions(
-        invert_condition, states
-    )
-    if invert:
-        icon_no_circle = True
-        icon_outline = False
+    icon_stroke_w = _icon_stroke_width(m.border, display_levels)
 
     ctx: dict[str, object] = {
         "w": svg_w,
@@ -215,15 +207,18 @@ def _build_tile_context(
         "r_inset": r_inset,
         "lpad": lpad,
         "rpad": rpad,
-        "primary": primary,
+        "primary": entity.name,
         "secondary": secondary,
-        "value_bold": value_bold,
-        "icon_svg": icon_svg,
+        "primary_font_sz": primary_font_sz,
+        "primary_weight": _font_weight_svg(primary_weight),
+        "secondary_font_sz": secondary_font_sz,
+        "secondary_weight": _font_weight_svg(secondary_weight),
+        "icon_svg": icon.svg,
         "icon_fill": icon_fill,
-        "icon_outline": icon_outline,
-        "icon_no_circle": icon_no_circle,
+        "icon_outline": icon.outline,
+        "icon_no_circle": icon.no_circle,
         "icon_stroke_w": icon_stroke_w,
-        "letter": letter,
+        "letter": icon.letter,
         "invert": invert,
     }
     # When icon is hidden, collapse the icon column so text starts

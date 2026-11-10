@@ -14,7 +14,10 @@
 
 from __future__ import annotations
 
+import re
+from datetime import date
 from typing import ClassVar
+from unittest.mock import patch
 
 from custom_components.eink_dashboard.const import (
     COLOR_GRAY,
@@ -25,6 +28,7 @@ from custom_components.eink_dashboard.render import (
     _compute_metrics,
     render_dashboard,
 )
+from custom_components.eink_dashboard.svg_render import render_widget_svg
 from custom_components.eink_dashboard.widgets.weather import (
     _build_weather_context,
 )
@@ -36,6 +40,8 @@ from tests.helpers import (
     make_config,
     render_to_image,
 )
+
+_PATCH_TODAY = "custom_components.eink_dashboard.render.date"
 
 MOCK_WEATHER_STATE = {
     "weather.home": {
@@ -76,6 +82,22 @@ MOCK_WEATHER_STATE = {
         },
     },
 }
+
+
+def _text_element(svg: str, content: str) -> str:
+    """Return the SVG ``<text>`` element whose content is ``content``.
+
+    Args:
+        svg: Rendered SVG string.
+        content: Exact text content of the element to find.
+
+    Returns:
+        The matching ``<text>…</text>`` element, including its
+        attributes.
+    """
+    match = re.search(r"<text\b[^>]*>" + re.escape(content) + r"</text>", svg)
+    assert match is not None, f"no <text> element containing {content!r}"
+    return match.group(0)
 
 
 class TestRenderWeather:
@@ -442,7 +464,7 @@ class TestRenderWeather:
         assert_has_dark_pixels(img, 400 - m.border, m.radius, 400, 100)
         # Bottom edge: total_h mirrors the renderer formula at s=1.0
         # with forecast.  icon_size=80 dominates temp_h (~44px for
-        # Roboto at 64px) at s=1.0, so max(icon_size, temp_h)=80.
+        # TRMNL at 64px) at s=1.0, so max(icon_size, temp_h)=80.
         s = 1.0
         pad = round(10 * s)
         total_h = (
@@ -528,6 +550,375 @@ class TestRenderWeather:
         without = render_dashboard([base], self._config())
         assert with_none == without
 
+    def test_weather_mode_full_is_default(self) -> None:
+        # Omitting mode must produce byte-identical output to
+        # mode="full" (no rendering change).
+        base = {"type": "weather", "entity": "weather.home", "x": 0, "y": 0}
+        with_full = render_dashboard(
+            [{**base, "mode": "full"}], self._config()
+        )
+        without = render_dashboard([base], self._config())
+        assert with_full == without
+
+    def test_weather_forecast_mode_hides_current(self) -> None:
+        # mode="forecast" must hide the icon/temp block and detail
+        # row entirely, keeping only the forecast columns — with no
+        # divider line, since there is nothing above it to separate
+        # from.
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "forecast_days": 3,
+            "mode": "forecast",
+        }
+        ctx = _build_weather_context(widget, self._config())
+        assert ctx["show_current"] is False
+        assert ctx["has_forecast"] is True
+        assert len(ctx["forecast_entries"]) == 3
+
+        img = render_to_image([widget], self._config())
+        # Forecast columns (day label, icon, hi/lo) still render.
+        assert_has_dark_pixels(img, 50, 30, 550, 140)
+        # Nothing renders above the forecast columns: the icon/temp
+        # block, detail row, and divider line that mode="full" would
+        # draw there are all gone.
+        assert_all_white(img, 0, 10, 600, 25)
+
+    def test_weather_forecast_mode_card_border(self) -> None:
+        # Border style in "forecast" mode: total_h is reduced
+        # because the icon/temp row and detail row are omitted, so
+        # current_h collapses to just the top padding, and the
+        # divider line's gap is omitted since there is nothing above
+        # it to separate from.
+        m = _compute_metrics(48)  # row_h_ref = round(48 * s) at s=1.0
+        widgets = [
+            {
+                "type": "weather",
+                "entity": "weather.home",
+                "x": 0,
+                "y": 0,
+                "w": 400,
+                "card_style": "border",
+                "mode": "forecast",
+            }
+        ]
+        img = render_to_image(widgets, self._config())
+        # Top edge (inset by m.radius to avoid rounded corners)
+        assert_has_dark_pixels(img, m.radius, 0, 400 - m.radius, m.border)
+        # Left edge
+        assert_has_dark_pixels(img, 0, m.radius, m.border, 100)
+        # Right edge
+        assert_has_dark_pixels(img, 400 - m.border, m.radius, 400, 100)
+        # Bottom edge: total_h mirrors the renderer formula at
+        # s=1.0 without the current-conditions block, so current_h
+        # is just top_pad (m.padding) instead of the full row1_h +
+        # detail_h.
+        s = 1.0
+        pad = round(10 * s)
+        total_h = (
+            m.padding  # current_h in forecast mode
+            + round(8 * s)  # sep_gap (no divider line in this mode)
+            + round(88 * s)  # forecast_zone_h
+            + round(16 * s)  # precip_text_h
+            + pad  # bottom pad
+        )
+        assert_has_dark_pixels(
+            img,
+            m.radius,
+            total_h - m.border,
+            400 - m.radius,
+            total_h,
+        )
+
+    def test_weather_forecast_mode_no_data_falls_back(self) -> None:
+        # mode="forecast" with no forecast data must fall back to
+        # showing current conditions instead of rendering a
+        # near-blank sliver.
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": 22,
+                    "temperature_unit": "°C",
+                    "humidity": 58,
+                    "forecast": [],
+                },
+            }
+        }
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "mode": "forecast",
+        }
+        cfg = make_config({"width": 600, "height": 300}, states=states)
+        ctx = _build_weather_context(widget, cfg)
+        # Fallback triggered: current conditions render despite the
+        # requested forecast-only mode.
+        assert ctx["show_current"] is True
+        assert ctx["has_forecast"] is False
+
+        img = render_to_image([widget], cfg)
+        # Icon and temperature still render.
+        assert_has_dark_pixels(
+            img, PADDING, 10, PADDING + 90, 100, threshold=200
+        )
+        assert_has_dark_pixels(img, PADDING + 106, 10, 300, 70)
+
+    def test_weather_current_mode_hides_forecast(self) -> None:
+        # mode="current" must hide the separator + forecast strip
+        # entirely, keeping only the icon/temp block and detail row.
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "forecast_days": 3,
+            "mode": "current",
+        }
+        ctx = _build_weather_context(widget, self._config())
+        assert ctx["show_current"] is True
+        assert ctx["has_forecast"] is False
+        assert ctx["forecast_entries"] == []
+
+        img = render_to_image([widget], self._config())
+        # Icon/temperature and detail row still render.
+        assert_has_dark_pixels(
+            img, PADDING, 10, PADDING + 90, 100, threshold=200
+        )
+        assert_has_dark_pixels(img, PADDING + 106, 10, 600, 70)
+        # No separator or forecast columns below the current-
+        # conditions block; read the boundary from total_h since
+        # it includes the current-mode date line.
+        assert_all_white(img, 0, ctx["total_h"] + 5, 600, 300)
+
+    def test_weather_current_mode_shows_feels_like_and_date(self) -> None:
+        # mode="current" adds a "Feels like" detail chip (from
+        # apparent_temperature) and a locale-aware date string
+        # derived from forecast[0]'s date.
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": 22,
+                    "temperature_unit": "°C",
+                    "apparent_temperature": 19.5,
+                    "forecast": [
+                        {
+                            "datetime": "2026-05-02T12:00:00",
+                            "temperature": 24,
+                            "templow": 16,
+                            "condition": "sunny",
+                            "precipitation": 0,
+                        },
+                    ],
+                },
+            }
+        }
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "mode": "current",
+        }
+        cfg = make_config({"width": 600, "height": 300}, states=states)
+        ctx = _build_weather_context(widget, cfg)
+
+        assert ctx["feels_like_text"] == "Feels like: 19.5°C"
+        assert ctx["date_text"] == "Saturday, 2026-05-02"
+
+        img = render_to_image([widget], cfg)
+        assert_has_dark_pixels(img, 0, int(ctx["date_y"]) - 10, 600, 300)
+
+    def test_weather_current_mode_hides_feels_like_when_missing(
+        self,
+    ) -> None:
+        # No apparent_temperature attribute on the entity: the
+        # feels-like line must be omitted, but the date string
+        # (which doesn't depend on it) still renders.
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "mode": "current",
+        }
+        ctx = _build_weather_context(widget, self._config())
+        assert ctx["feels_like_text"] == ""
+        assert ctx["date_text"] == "Saturday, 2026-05-02"
+
+    def test_weather_current_mode_date_falls_back_to_today(self) -> None:
+        # With no forecast data, the date string falls back to
+        # _get_today() (mocked here) rather than forecast[0]'s date.
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": 22,
+                    "temperature_unit": "°C",
+                },
+            }
+        }
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "mode": "current",
+        }
+        cfg = make_config({"width": 600, "height": 300}, states=states)
+        with patch(_PATCH_TODAY, wraps=date) as mock_date:
+            mock_date.today.return_value = date(2026, 5, 2)
+            ctx = _build_weather_context(widget, cfg)
+        assert ctx["date_text"] == "Saturday, 2026-05-02"
+
+    @staticmethod
+    def _current_mode_bar_ctx(
+        temperature: float, lo: float = 14, hi: float = 28
+    ) -> dict[str, object]:
+        """Build a mode="current" context for a given current reading.
+
+        Uses a fixed forecast[0] with templow=``lo``, temperature=``hi``
+        (the today min/max bar's endpoints, 14/28 by default) so tests
+        only vary the current reading.
+        """
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": temperature,
+                    "temperature_unit": "°C",
+                    "forecast": [
+                        {
+                            "datetime": "2026-05-02T12:00:00",
+                            "temperature": hi,
+                            "templow": lo,
+                            "condition": "sunny",
+                        },
+                    ],
+                },
+            }
+        }
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": 0,
+            "y": 0,
+            "mode": "current",
+        }
+        cfg = make_config({"width": 600, "height": 400}, states=states)
+        return _build_weather_context(widget, cfg)
+
+    def test_weather_current_mode_bar_dot_position_proportional(
+        self,
+    ) -> None:
+        # The dot's x-position along the bar must be proportional
+        # to (current - lo) / (hi - lo), with lo=14 and hi=28.
+        ctx = self._current_mode_bar_ctx(21)
+        expected_frac = (21 - 14) / (28 - 14)
+        expected_cx = ctx["bar_x1"] + round(expected_frac * ctx["bar_w"])
+        assert ctx["bar_dot_cx"] == expected_cx
+
+    def test_weather_current_mode_bar_dot_clamps_out_of_range(self) -> None:
+        # A current reading below lo or above hi must clamp the dot
+        # to the corresponding end of the bar rather than drawing it
+        # outside the bar's bounds.
+        below = self._current_mode_bar_ctx(5)
+        assert below["bar_dot_cx"] == below["bar_x1"]
+
+        above = self._current_mode_bar_ctx(40)
+        assert above["bar_dot_cx"] == above["bar_x1"] + above["bar_w"]
+
+    def test_weather_current_mode_bar_absent_without_forecast(self) -> None:
+        # No forecast data: there is no today templow/temperature to
+        # anchor the bar to, so it must not render.
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 10,
+            "mode": "current",
+        }
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": 21.9,
+                    "temperature_unit": "°C",
+                    "forecast": [],
+                },
+            }
+        }
+        cfg = make_config({"width": 600, "height": 300}, states=states)
+        ctx = _build_weather_context(widget, cfg)
+        assert ctx["show_bar"] is False
+        assert ctx["bar_gradient_stops"] == []
+
+    def test_weather_current_mode_bar_absent_with_empty_temperature(
+        self,
+    ) -> None:
+        # forecast[0]["temperature"] == "" (this codebase's convention
+        # for "missing") must not crash the bar_hi - bar_lo arithmetic
+        # and must suppress the bar, matching the None case.
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": 0,
+            "y": 0,
+            "mode": "current",
+        }
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": 21.9,
+                    "temperature_unit": "°C",
+                    "forecast": [
+                        {
+                            "datetime": "2026-05-02T12:00:00",
+                            "temperature": "",
+                            "templow": 14,
+                            "condition": "sunny",
+                        },
+                    ],
+                },
+            }
+        }
+        cfg = make_config({"width": 600, "height": 300}, states=states)
+        ctx = _build_weather_context(widget, cfg)
+        assert ctx["show_bar"] is False
+
+    def test_weather_current_mode_bar_dot_centered_when_hi_equals_lo(
+        self,
+    ) -> None:
+        # A zero-range today (hi == lo) must center the dot rather
+        # than dividing by zero.
+        ctx = self._current_mode_bar_ctx(20, lo=20, hi=20)
+        assert ctx["bar_dot_cx"] == ctx["bar_x1"] + round(0.5 * ctx["bar_w"])
+
+    def test_weather_current_mode_bar_dot_at_exact_endpoints(self) -> None:
+        # A current reading exactly at lo or hi is a distinct code
+        # path from the out-of-range clamp (frac lands at 0.0/1.0
+        # naturally rather than via min()/max()).
+        at_lo = self._current_mode_bar_ctx(14)
+        assert at_lo["bar_dot_cx"] == at_lo["bar_x1"]
+
+        at_hi = self._current_mode_bar_ctx(28)
+        assert at_hi["bar_dot_cx"] == at_hi["bar_x1"] + at_hi["bar_w"]
+
+    def test_weather_current_mode_bar_negative_temperatures(self) -> None:
+        # Negative lo/hi must still produce a proportional dot
+        # position and a full set of gradient stops.
+        ctx = self._current_mode_bar_ctx(-2, lo=-10, hi=5)
+        expected_frac = (-2 - -10) / (5 - -10)
+        expected_cx = ctx["bar_x1"] + round(expected_frac * ctx["bar_w"])
+        assert ctx["bar_dot_cx"] == expected_cx
+        assert len(ctx["bar_gradient_stops"]) == 13
+
     def test_weather_card_style_none_has_soft_padding(self) -> None:
         # card_style="none" applies soft lpad so content is inset by
         # m.padding, consistent with tile/heading/entities.
@@ -589,6 +980,101 @@ class TestRenderWeather:
         # content_left = ox + m.padding, temp_x = content_left + 80 + 16
         temp_x_min = ox + m.padding + 80 + 16
         assert_has_dark_pixels(img, temp_x_min, oy + 10, ox + 280, oy + 70)
+
+    # ── Font customization tests ──────────────────────
+
+    @staticmethod
+    def _font_widget(**overrides: object) -> dict[str, object]:
+        """Build a row-1-only weather widget for font assertions."""
+        return {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": 0,
+            "y": 0,
+            "w": 500,
+            "forecast_days": 0,
+            **overrides,
+        }
+
+    def test_weather_default_temp_weight_is_bold(self) -> None:
+        # Without any font override the temperature keeps the bold
+        # weight the template has always rendered.
+        svg = render_widget_svg(self._font_widget(), self._config())
+        assert 'font-weight="bold"' in _text_element(svg, "22°C")
+
+    def test_weather_fonts_temp_weight_regular_unbolds(self) -> None:
+        # fonts.temp.weight="regular" removes the temperature's
+        # default bold weight.
+        svg = render_widget_svg(
+            self._font_widget(fonts={"temp": {"weight": "regular"}}),
+            self._config(),
+        )
+        temp = _text_element(svg, "22°C")
+        assert 'font-weight="400"' in temp
+        assert 'font-weight="bold"' not in temp
+
+    def test_weather_fonts_detail_weight_bold(self) -> None:
+        # fonts.detail.weight="bold" drives the font_sm texts, here
+        # today's hi temperature.
+        svg = render_widget_svg(
+            self._font_widget(fonts={"detail": {"weight": "bold"}}),
+            self._config(),
+        )
+        assert 'font-weight="bold"' in _text_element(svg, "24°")
+
+    def test_weather_fonts_precip_weight_bold(self) -> None:
+        # fonts.precip.weight="bold" drives the font_xs texts, here
+        # today's precipitation.
+        svg = render_widget_svg(
+            self._font_widget(fonts={"precip": {"weight": "bold"}}),
+            self._config(),
+        )
+        assert 'font-weight="bold"' in _text_element(svg, "0mm")
+
+    def test_weather_default_detail_and_precip_are_regular(self) -> None:
+        # Detail and precip default to regular weight; the
+        # temperature stays the only bold text on the card.
+        svg = render_widget_svg(self._font_widget(), self._config())
+        assert svg.count('font-weight="bold"') == 1
+        assert 'font-weight="400"' in _text_element(svg, "24°")
+        assert 'font-weight="400"' in _text_element(svg, "0mm")
+
+    def test_weather_fonts_size_override_ignored(self) -> None:
+        # Weather geometry is coupled to font_size, so the roles
+        # expose weight-only overrides: a size override must leave
+        # the rendered SVG untouched.
+        default = render_widget_svg(self._font_widget(), self._config())
+        overridden = render_widget_svg(
+            self._font_widget(fonts={"temp": {"size": 200}}),
+            self._config(),
+        )
+        assert overridden == default
+
+    def test_weather_font_size_still_scales_geometry(self) -> None:
+        # font_size keeps driving the weather geometry: a larger
+        # font_size renders a visibly taller temperature glyph.
+        # The mock state carries only a temperature, so the measured
+        # band holds the temperature text and nothing else.
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {
+                    "temperature": 22,
+                    "temperature_unit": "°C",
+                },
+            }
+        }
+        cfg = self._config(states=states)
+        base = self._font_widget(card_style="none", h=300)
+        small = render_to_image([{**base, "font_size": 32}], cfg)
+        large = render_to_image([{**base, "font_size": 48}], cfg)
+        bbox_small = content_bbox(small, 200, 0, 500, 300)
+        bbox_large = content_bbox(large, 200, 0, 500, 300)
+        assert bbox_small is not None
+        assert bbox_large is not None
+        assert (bbox_large[3] - bbox_large[1]) > (
+            bbox_small[3] - bbox_small[1]
+        )
 
 
 # ── Custom sensor overrides ─────────────────────────────────────────

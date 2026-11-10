@@ -21,8 +21,7 @@ The font directory is passed explicitly to resvg with system fonts
 disabled so rendering is identical across HA OS, Docker, and dev
 machines regardless of installed system fonts.  An optional
 user-configured directory (``config["font_dir"]``) can be added
-alongside the bundled fonts to cover scripts Roboto lacks glyphs
-for.
+alongside the bundled fonts for additional glyph coverage.
 
 Icon SVG files are inlined as ``<path>`` elements via Jinja2 filters
 (``mdi_svg``, ``weather_svg``).  Path data is cached so file I/O
@@ -34,8 +33,10 @@ from __future__ import annotations
 import bisect
 import functools
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from xml.sax.saxutils import quoteattr
 
 import defusedxml.ElementTree as ET
@@ -44,16 +45,60 @@ import markupsafe
 import resvg_py
 
 from .const import (
+    COLOR_BLACK,
     COLOR_WHITE,
+    DEFAULT_BLACK_DIVIDERS,
+    DEFAULT_BLACK_TEXT,
+    DEFAULT_FONT_FAMILY,
+    DEFAULT_PIXEL_FONTS,
     DisplayConfig,
+    FontFamily,
     Widget,
     WidgetType,
     color_to_hex,
 )
+from .fonts import (
+    current_font_family,
+    font_family,
+    font_family_context,
+    pixel_font_limit_context,
+    pixel_font_size,
+    pixel_fonts_active,
+    pixel_fonts_context,
+)
 
 _hex_white = color_to_hex(COLOR_WHITE)
+_hex_black = color_to_hex(COLOR_BLACK)
 
-_FONTS_DIR = Path(__file__).parent / "fonts" / "Roboto"
+_TEXT_TAG_RE = re.compile(r"<text\b[^>]*>")
+# Attribute patterns accept either quote style; the lookbehind keeps
+# names such as ``data-fill`` from matching.
+_FILL_ATTR_RE = re.compile(r"""(?<![\w-])(fill\s*=\s*)(["'])(.*?)\2""")
+_STYLE_ATTR_RE = re.compile(r"""(?<![\w-])(style\s*=\s*)(["'])(.*?)\2""")
+# A ``fill`` declaration inside a style value; ``fill-opacity`` and
+# similar properties are not matched because ``:`` must follow.
+_STYLE_FILL_RE = re.compile(r"(?<![\w-])(fill\s*:\s*)([^;]*?)(\s*(?:;|$))")
+# Text fills that are kept as-is in black-text mode: white text sits on
+# a dark fill (inverted styles) and would vanish if recoloured.
+_KEEP_TEXT_FILLS = frozenset({_hex_white, "#fff", "white", "none"})
+# Elements templates mark as dividers via an ``eink-divider`` class
+# token.  The class value may use either quote style and may list
+# other classes before or after the token.
+_DIVIDER_TAG_RE = re.compile(
+    r"""<[a-zA-Z][\w:-]*\b[^>]*?(?<![\w-])class\s*=\s*(["'])"""
+    r"""(?:[^"'>]*\s)?eink-divider(?:\s[^"'>]*)?\1[^>]*>"""
+)
+_PAINT_ATTR_RE = re.compile(
+    r"""(?<![\w-])((?:fill|stroke)\s*=\s*)(["'])(.*?)\2"""
+)
+# A ``fill`` or ``stroke`` declaration inside a style value;
+# ``stroke-width`` and similar properties are not matched because
+# ``:`` must follow.
+_STYLE_PAINT_RE = re.compile(
+    r"(?<![\w-])((?:fill|stroke)\s*:\s*)([^;]*?)(\s*(?:;|$))"
+)
+
+_FONTS_DIR = Path(__file__).parent / "fonts"
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _ICONS_DIR = Path(__file__).parent / "icons" / "svg"
 _ICONS_DIR_RESOLVED = _ICONS_DIR.resolve()
@@ -103,12 +148,11 @@ def _svg_to_png(
     Defaults to ``skip_system_fonts=True`` so rendering is identical
     across HA OS, Docker, and dev machines.  Only fonts shipped in the
     ``fonts/`` directory, plus any directories in ``extra_font_dirs``,
-    are available to the renderer.  All templates share the single
-    ``font-family="Roboto"`` declaration; when a character has no
-    glyph in Roboto, resvg falls back to searching every other font
-    loaded into its fontdb, so a user-supplied font covering a script
-    Roboto lacks (e.g. Hebrew) is picked up automatically without any
-    template changes.  Setting ``use_system_fonts=True`` additionally
+    are available to the renderer.  Templates use the ``font_family``
+    filter to select the closest TRMNL optical size.  When a character
+    has no glyph in TRMNL, resvg falls back to searching every other
+    font loaded into its fontdb, so user-supplied fonts are picked up
+    automatically.  Setting ``use_system_fonts=True`` additionally
     loads fonts already installed on the host, trading the
     reproducibility guarantee for convenience on hosts that already
     have broad script coverage installed.
@@ -126,7 +170,7 @@ def _svg_to_png(
         height: Output height in pixels, or ``None`` to use the
             SVG's intrinsic height.
         extra_font_dirs: Additional directories to search for font
-            files, appended after the bundled Roboto directory.
+            files, appended after the bundled TRMNL directory.
             ``None`` or empty means no extra directories.
         use_system_fonts: When ``True``, also load fonts installed on
             the host system.  Defaults to ``False`` for reproducible
@@ -135,7 +179,11 @@ def _svg_to_png(
     Returns:
         PNG image as raw bytes.
     """
-    font_dirs = [str(_FONTS_DIR)]
+    font_dirs = [
+        str(_FONTS_DIR / "TRMNL"),
+        str(_FONTS_DIR / "Roboto"),
+        str(_FONTS_DIR / "Inter"),
+    ]
     if extra_font_dirs:
         font_dirs.extend(extra_font_dirs)
     return bytes(
@@ -416,6 +464,55 @@ def _weather_svg_filter(condition: str, size: int) -> str:
     return markupsafe.Markup(_build_inline_svg(paths, size, "0 0 30 30"))
 
 
+def _text_width_filter(text: str, size: int, weight: str = "normal") -> int:
+    """Measure the rendered pixel width of ``text``.
+
+    Uses the same bundled TTF files that resvg renders with, so the
+    measurement matches the rasterised text.
+
+    Args:
+        text: Text to measure.
+        size: Font size in pixels.
+        weight: ``"normal"``, ``"medium"`` (500) or ``"bold"``.
+
+    Returns:
+        Text advance width in whole pixels.
+    """
+    from .render import _load_font
+
+    font = _load_font(
+        int(size), medium=weight == "medium", bold=weight == "bold"
+    )
+    return round(font.getlength(str(text)))
+
+
+def _fit_width_filter(
+    text: str, max_w: float, size: int, weight: str = "normal"
+) -> str:
+    """Truncate ``text`` with an ellipsis to fit ``max_w`` pixels.
+
+    Args:
+        text: Text to fit.
+        max_w: Available width in pixels; zero or negative leaves no
+            room and yields an empty string.
+        size: Font size in pixels.
+        weight: ``"normal"``, ``"medium"`` (500) or ``"bold"``.
+
+    Returns:
+        ``text`` unchanged when it fits, otherwise the longest prefix
+        plus ``"…"`` that fits, or ``""`` when not even ``"…"`` fits.
+    """
+    from .render import _load_font
+    from .widgets.graph.geometry import _truncate_to_width
+
+    if max_w <= 0:
+        return ""
+    font = _load_font(
+        int(size), medium=weight == "medium", bold=weight == "bold"
+    )
+    return _truncate_to_width(str(text), font, max_w)
+
+
 # The spec (SVG_EVERYTHING.md) says autoescape=False, but we keep
 # autoescape=True: user-controlled text (HA entity states) may
 # contain < or & which would produce invalid SVG/XML and crash
@@ -428,8 +525,10 @@ def _make_jinja_env(
 ) -> jinja2.Environment:
     """Create a Jinja2 env configured for SVG template rendering.
 
-    Sets ``autoescape=True`` and registers the ``mdi_svg`` and
-    ``weather_svg`` icon-inlining filters.
+    Sets ``autoescape=True`` and registers the ``font_family`` and
+    ``font_px`` font filters, the ``mdi_svg`` and ``weather_svg``
+    icon-inlining filters, and the ``text_width`` and ``fit_width``
+    text-measuring filters.
 
     Args:
         loader: Jinja2 template loader to use.
@@ -439,8 +538,12 @@ def _make_jinja_env(
         registered.
     """
     env = jinja2.Environment(loader=loader, autoescape=True)
+    env.filters["font_family"] = font_family
+    env.filters["font_px"] = pixel_font_size
     env.filters["mdi_svg"] = _mdi_svg_filter
     env.filters["weather_svg"] = _weather_svg_filter
+    env.filters["text_width"] = _text_width_filter
+    env.filters["fit_width"] = _fit_width_filter
     return env
 
 
@@ -448,7 +551,10 @@ _jinja_env = _make_jinja_env(
     jinja2.FileSystemLoader(str(_TEMPLATE_DIR)),
 )
 
-type SvgContextFn = Callable[[Widget, DisplayConfig], dict[str, object]]
+# The widget parameter is ``Any``: dispatch on ``widget["type"]`` is
+# where untyped stored JSON becomes one of the per-type widget configs
+# in ``widget_config.py``, so each builder declares its own type.
+type SvgContextFn = Callable[[Any, DisplayConfig], dict[str, object]]
 
 # Import widget builders at module bottom to avoid circular imports:
 # widget modules import from _helpers which imports _mdi_svg_filter
@@ -463,12 +569,14 @@ from .widgets import (  # noqa: E402
     _build_gauge_context,
     _build_graph_context,
     _build_heading_context,
+    _build_meteogram_context,
     _build_sensor_context,
     _build_separator_context,
     _build_tile_context,
     _build_waste_schedule_context,
     _build_weather_context,
     _build_weather_wall_context,
+    _build_week_calendar_context,
 )
 
 _SVG_RENDERERS: dict[str, SvgContextFn] = {
@@ -480,13 +588,126 @@ _SVG_RENDERERS: dict[str, SvgContextFn] = {
     WidgetType.GAUGE: _build_gauge_context,
     WidgetType.GRAPH: _build_graph_context,
     WidgetType.HEADING: _build_heading_context,
+    WidgetType.METEOGRAM: _build_meteogram_context,
     WidgetType.SENSOR: _build_sensor_context,
     WidgetType.SEPARATOR: _build_separator_context,
     WidgetType.TILE: _build_tile_context,
     WidgetType.WASTE_SCHEDULE: _build_waste_schedule_context,
     WidgetType.WEATHER: _build_weather_context,
     WidgetType.WEATHER_WALL: _build_weather_wall_context,
+    WidgetType.WEEK_CALENDAR: _build_week_calendar_context,
 }
+
+
+def _force_black_text(svg: str) -> str:
+    """Recolour every non-white ``<text>`` fill in ``svg`` to black.
+
+    Gray text (names, secondary labels) gets dithered into a speckled
+    dot pattern on displays with few gray levels.  Rewriting the fill on
+    the rendered SVG covers every template and fill variable at once.
+    White fills are kept because they mark text drawn on a dark
+    background; shapes such as icon circles and dividers are untouched.
+    Both the ``fill`` attribute (single- or double-quoted) and a
+    ``fill`` declaration inside a ``style`` attribute are rewritten.
+
+    Args:
+        svg: Rendered SVG document.
+
+    Returns:
+        The SVG with text fills recoloured.
+    """
+
+    def _fix_fill_attr(match: re.Match[str]) -> str:
+        prefix, quote, value = match.groups()
+        if value.strip().lower() in _KEEP_TEXT_FILLS:
+            return match.group(0)
+        return f"{prefix}{quote}{_hex_black}{quote}"
+
+    def _fix_style_fill(match: re.Match[str]) -> str:
+        prefix, value, end = match.groups()
+        if value.strip().lower() in _KEEP_TEXT_FILLS:
+            return match.group(0)
+        return f"{prefix}{_hex_black}{end}"
+
+    def _fix_style_attr(match: re.Match[str]) -> str:
+        prefix, quote, value = match.groups()
+        value = _STYLE_FILL_RE.sub(_fix_style_fill, value)
+        return f"{prefix}{quote}{value}{quote}"
+
+    def _fix_tag(tag: re.Match[str]) -> str:
+        fixed = _FILL_ATTR_RE.sub(_fix_fill_attr, tag.group(0))
+        return _STYLE_ATTR_RE.sub(_fix_style_attr, fixed)
+
+    return _TEXT_TAG_RE.sub(_fix_tag, svg)
+
+
+def _force_black_dividers(svg: str) -> str:
+    """Recolour every element tagged ``eink-divider`` in ``svg`` to black.
+
+    Thin gray lines are dithered into dotted or broken lines on
+    displays with few gray levels.  Templates mark list dividers,
+    separators and left card bars with an ``eink-divider`` class token;
+    their non-white ``fill`` and ``stroke`` values become black.  White
+    and ``none`` are kept so unpainted parts stay unpainted.  Both the
+    ``fill``/``stroke`` attributes (single- or double-quoted) and
+    ``fill``/``stroke`` declarations inside a ``style`` attribute are
+    rewritten.
+
+    Args:
+        svg: Rendered SVG document.
+
+    Returns:
+        The SVG with divider colours recoloured.
+    """
+
+    def _fix_paint_attr(match: re.Match[str]) -> str:
+        prefix, quote, value = match.groups()
+        if value.strip().lower() in _KEEP_TEXT_FILLS:
+            return match.group(0)
+        return f"{prefix}{quote}{_hex_black}{quote}"
+
+    def _fix_style_paint(match: re.Match[str]) -> str:
+        prefix, value, end = match.groups()
+        if value.strip().lower() in _KEEP_TEXT_FILLS:
+            return match.group(0)
+        return f"{prefix}{_hex_black}{end}"
+
+    def _fix_style_attr(match: re.Match[str]) -> str:
+        prefix, quote, value = match.groups()
+        value = _STYLE_PAINT_RE.sub(_fix_style_paint, value)
+        return f"{prefix}{quote}{value}{quote}"
+
+    def _fix_tag(tag: re.Match[str]) -> str:
+        fixed = _PAINT_ATTR_RE.sub(_fix_paint_attr, tag.group(0))
+        return _STYLE_ATTR_RE.sub(_fix_style_attr, fixed)
+
+    return _DIVIDER_TAG_RE.sub(_fix_tag, svg)
+
+
+def _smooth_fallback_text(svg: str) -> str:
+    """Re-enable anti-aliasing for large text drawn in Inter.
+
+    Pixel-perfect text turns anti-aliasing off for the whole widget,
+    but TRMNL text above the large-text limit falls back to the
+    outline font Inter, which looks jagged without it.  With TRMNL
+    selected, only those fallback ``<text>`` elements list Inter
+    first in their ``font-family``; they get ``geometricPrecision``,
+    overriding the inherited ``optimizeSpeed``.
+
+    Args:
+        svg: Rendered SVG document.
+
+    Returns:
+        The SVG with fallback text elements anti-aliased.
+    """
+
+    def _fix_tag(tag: re.Match[str]) -> str:
+        text = tag.group(0)
+        if f'font-family="{FontFamily.INTER},' not in text:
+            return text
+        return '<text text-rendering="geometricPrecision"' + text[5:]
+
+    return _TEXT_TAG_RE.sub(_fix_tag, svg)
 
 
 def render_widget_svg(
@@ -514,6 +735,32 @@ def render_widget_svg(
             renderer.
     """
     wtype = widget["type"]
-    ctx = _SVG_RENDERERS[wtype](widget, config)
-    tmpl = _jinja_env.get_template(f"{wtype}.svg.j2")
-    return tmpl.render(**ctx)
+    requested_family = config.get("font_family", DEFAULT_FONT_FAMILY)
+    pixel_fonts = config.get("pixel_fonts", DEFAULT_PIXEL_FONTS)
+    # The template is rendered inside these contexts because the
+    # font_family and font_px filters read them too.
+    with (
+        font_family_context(requested_family),
+        pixel_fonts_context(pixel_fonts),
+        pixel_font_limit_context(config.get("pixel_font_max_scale")),
+    ):
+        selected_family = current_font_family()
+        crisp_text = pixel_fonts_active()
+        ctx = _SVG_RENDERERS[wtype](widget, config)
+        ctx["font_family_name"] = selected_family
+        tmpl = _jinja_env.get_template(f"{wtype}.svg.j2")
+        svg = tmpl.render(**ctx)
+    if config.get("black_text", DEFAULT_BLACK_TEXT):
+        svg = _force_black_text(svg)
+    if config.get("black_dividers", DEFAULT_BLACK_DIVIDERS):
+        svg = _force_black_dividers(svg)
+    if crisp_text:
+        # Snapped pixel-font glyphs already sit on whole pixels, so
+        # anti-aliasing only adds gray edges that a black/white
+        # threshold would fatten.  The attribute is inherited by every
+        # <text> element.  Templates always start with "<svg ".
+        stripped = svg.lstrip()
+        if stripped.startswith("<svg "):
+            svg = '<svg text-rendering="optimizeSpeed" ' + stripped[5:]
+        svg = _smooth_fallback_text(svg)
+    return svg

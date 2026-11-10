@@ -33,6 +33,7 @@ from .frame import _build_frame_context
 from .gauge import _build_gauge_context
 from .graph import _build_graph_context
 from .heading import _build_heading_context
+from .meteogram import _build_meteogram_context
 from .sensor import _build_sensor_context
 from .separator import _build_separator_context
 from .tile import _build_tile_context
@@ -41,6 +42,7 @@ from .waste_schedule import (
 )
 from .weather import _build_weather_context
 from .weather_wall import _build_weather_wall_context
+from .week_calendar import _build_week_calendar_context
 
 __all__ = [
     "_build_calendar_context",
@@ -51,10 +53,12 @@ __all__ = [
     "_build_gauge_context",
     "_build_graph_context",
     "_build_heading_context",
+    "_build_meteogram_context",
     "_build_sensor_context",
     "_build_separator_context",
     "_build_tile_context",
     "_build_waste_schedule_context",
     "_build_weather_context",
     "_build_weather_wall_context",
+    "_build_week_calendar_context",
 ]

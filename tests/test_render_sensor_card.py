@@ -29,6 +29,9 @@ from custom_components.eink_dashboard.render import (
 )
 from custom_components.eink_dashboard.svg_render import render_widget_svg
 from custom_components.eink_dashboard.widgets._helpers import _card_insets
+from custom_components.eink_dashboard.widgets.sensor import (
+    _build_sensor_context,
+)
 from tests.helpers import (
     _right_icon_ring_region,
     assert_all_white,
@@ -422,23 +425,8 @@ class TestRenderSensor:
         value_h = value_bbox[3] - value_bbox[1]
         assert value_h > name_h
 
-    def test_sensor_bold_value_renders_bold_weight(self) -> None:
-        # bold_value=True renders the state value with a bold
-        # font-weight attribute in the SVG.
-        widget = {
-            "type": "sensor",
-            "x": 0,
-            "y": 0,
-            "w": 400,
-            "h": 112,
-            "entity": "sensor.temperature",
-            "bold_value": True,
-        }
-        svg = render_widget_svg(widget, self._config())
-        assert 'font-weight="bold"' in svg
-
     def test_sensor_default_value_not_bold(self) -> None:
-        # Without bold_value, the state value has no bold
+        # By default, the state value has no bold
         # font-weight attribute.
         widget = {
             "type": "sensor",
@@ -450,6 +438,104 @@ class TestRenderSensor:
         }
         svg = render_widget_svg(widget, self._config())
         assert 'font-weight="bold"' not in svg
+
+    # ── Font customization tests ──────────────────────
+
+    def test_sensor_value_font_size_override(self) -> None:
+        # fonts.value.size enlarges the black value glyphs in the
+        # info section relative to the widget's derived default size.
+        h = 224
+        base = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": h,
+            "entity": "sensor.temperature",
+            "hide_name": True,
+        }
+        header_h = round(h * 0.40)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"value": {"size": 96}}}],
+            self._config(),
+        )
+        bbox_default = content_bbox(default, 0, header_h, 400, h)
+        bbox_bigger = content_bbox(bigger, 0, header_h, 400, h)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_sensor_name_font_size_override(self) -> None:
+        # fonts.name.size enlarges the gray name glyphs in the header
+        # row (left portion; the icon sits at the right edge).
+        h = 224
+        base = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": h,
+            "entity": "sensor.temperature",
+        }
+        header_h = round(h * 0.40)
+        default = render_to_image([base], self._config())
+        bigger = render_to_image(
+            [{**base, "fonts": {"name": {"size": 40}}}],
+            self._config(),
+        )
+        bbox_default = content_bbox(default, 0, 0, 200, header_h)
+        bbox_bigger = content_bbox(bigger, 0, 0, 200, header_h)
+        assert bbox_default is not None
+        assert bbox_bigger is not None
+        assert (bbox_bigger[3] - bbox_bigger[1]) > (
+            bbox_default[3] - bbox_default[1]
+        )
+
+    def test_sensor_fonts_value_weight_bold(self) -> None:
+        # fonts.value.weight="bold" renders the value in bold.
+        widget = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 224,
+            "entity": "sensor.temperature",
+            "fonts": {"value": {"weight": "bold"}},
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="bold"' in svg
+
+    def test_sensor_fonts_name_weight_bold(self) -> None:
+        # fonts.name.weight="bold" overrides the name's default
+        # medium weight.
+        widget = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 224,
+            "entity": "sensor.temperature",
+            "fonts": {"name": {"weight": "bold"}},
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="bold"' in svg
+
+    def test_sensor_name_default_weight_is_medium(self) -> None:
+        # Without overrides the name renders at the medium (500)
+        # weight the template has always used.
+        widget = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 224,
+            "entity": "sensor.temperature",
+        }
+        svg = render_widget_svg(widget, self._config())
+        assert 'font-weight="500"' in svg
 
     def test_sensor_name_override(self) -> None:
         # name= overrides the entity friendly_name; renders differ.
@@ -516,6 +602,49 @@ class TestRenderSensor:
         assert with_unit != without_unit, (
             "unit_of_measurement should change rendered output"
         )
+
+    def test_sensor_decimals_overrides_default_precision(self) -> None:
+        # decimals=0 rounds the displayed value to a whole number,
+        # overriding the default capped-at-1 formatting.
+        widget = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 112,
+            "entity": "sensor.temperature",
+            "decimals": 0,
+        }
+        ctx = _build_sensor_context(widget, self._config())
+        assert ctx["value_text"] == "22"
+
+    def test_sensor_humidity_uses_device_class_default_precision(
+        self,
+    ) -> None:
+        # With no widget decimals= and no HA display_precision, a
+        # humidity entity falls back to the device-class default of
+        # 0 decimals, matching HA's own whole-percent display.
+        states = {
+            **MOCK_SENSOR_CARD_STATES,
+            "sensor.humidity": {
+                "state": "48.2",
+                "attributes": {
+                    "friendly_name": "Humidity",
+                    "device_class": "humidity",
+                    "unit_of_measurement": "%",
+                },
+            },
+        }
+        widget = {
+            "type": "sensor",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 112,
+            "entity": "sensor.humidity",
+        }
+        ctx = _build_sensor_context(widget, self._config(states=states))
+        assert ctx["value_text"] == "48"
 
     def test_sensor_unit_override(self) -> None:
         # unit= overrides the automatically detected unit.

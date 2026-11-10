@@ -113,6 +113,12 @@ export interface DisplayConfig {
    * Used to widen dividers and borders for low-depth displays.
    */
   display_levels?: number;
+  /**
+   * Default maximum list row height in pixels, scaled to the device's
+   * pixel density so rows keep the same physical size.  Used when a
+   * list widget has no `row_height`; editor fallback is 56.
+   */
+  row_height?: number;
 }
 
 /** Static device metadata returned by the `eink_dashboard/layout` WebSocket command. */
@@ -156,6 +162,9 @@ export type CardStyle = "border" | "left_bar" | "none";
 
 /** Icon circle rendering mode for card-style widgets. */
 export type IconStyle = "filled" | "outlined" | "none";
+
+/** Weather widget display mode. */
+export type WeatherMode = "full" | "forecast" | "current";
 
 /** Response from the eink_dashboard/render_widgets WebSocket command. */
 export interface RenderWidgetsResponse {
@@ -346,6 +355,45 @@ export interface LegacyCondition {
   state_not?: string | string[];
 }
 
+// ── Font customization ────────────────────────────────────────────────────────
+
+/**
+ * Font weight keyword for a text role.
+ *
+ * Mirrors the `FontWeight` enum in `const.py`; each value maps to a
+ * Roboto face (Regular / Medium / Bold) used for both measurement
+ * and rasterisation.
+ */
+export type FontWeight = "regular" | "medium" | "bold";
+
+/**
+ * Font override for a single text role within a widget.
+ *
+ * Both members are optional: an omitted `size` keeps the widget's
+ * derived size (scaled by the display-level `font_scale`), and an
+ * omitted `weight` keeps the role's default weight.
+ */
+export interface FontSpec {
+  /**
+   * Absolute font size in pixels (8–72). Omit to use the widget's
+   * derived size, which the display-level `font_scale` multiplies.
+   */
+  size?: number;
+  /**
+   * Font weight. Omit to use the role's default (e.g. the entity
+   * widget's name defaults to `"medium"`).
+   */
+  weight?: FontWeight;
+}
+
+/**
+ * Per-role font overrides for a widget, keyed by role name.
+ *
+ * Role names are widget-specific (e.g. the entity widget uses
+ * `value`, `name`, and `unit`). Unknown roles are ignored.
+ */
+export type WidgetFonts = Record<string, FontSpec>;
+
 // ── Widget types ──────────────────────────────────────────────────────────────
 
 /**
@@ -372,6 +420,11 @@ interface WidgetBase {
   h?: number;
   /** Font size override (weather widget only). */
   font_size?: number;
+  /**
+   * Per-role font size and weight overrides. Role names are
+   * widget-specific; see each widget interface for its roles.
+   */
+  fonts?: WidgetFonts;
   /** Foreground color as a grayscale integer (0 = black, 255 = white). */
   color?: number;
   /**
@@ -412,7 +465,11 @@ export interface SeparatorWidget extends WidgetBase {
   length?: number;
 }
 
-/** Weather forecast widget with conditions and temperature. */
+/**
+ * Weather forecast widget with conditions and temperature.
+ *
+ * `fonts` roles (weight-only): `temp`, `detail`, `precip`.
+ */
 export interface WeatherWidget extends WidgetBase {
   type: "weather";
   /** HA weather entity ID. */
@@ -433,6 +490,12 @@ export interface WeatherWidget extends WidgetBase {
   humidity_entity?: string;
   /** Decorative frame style. */
   card_style?: CardStyle;
+  /**
+   * Display mode. "full" shows current conditions and the
+   * forecast grid; "forecast" hides the current-conditions
+   * block and shows only the forecast grid.
+   */
+  mode?: WeatherMode;
 }
 
 /** Full-panel weather layout for a wall-mounted e-ink display. */
@@ -449,15 +512,17 @@ export interface WeatherWallWidget extends WidgetBase {
   palette?: string;
 }
 
-/** Device battery level indicator in icon or chip layout. */
+/**
+ * Device battery level indicator in icon or chip layout.
+ *
+ * `fonts` roles: `label`.
+ */
 export interface DeviceBatteryWidget extends WidgetBase {
   type: "device_battery";
   /** Visual layout mode for the indicator. */
   layout?: "icon" | "chip";
   /** Decorative frame style. */
   card_style?: CardStyle;
-  /** When true, renders the percentage label in bold. */
-  bold_value?: boolean;
 }
 
 /** A single waste-collection type entry in the schedule widget. */
@@ -468,7 +533,11 @@ export interface WasteScheduleEntry {
   label: string;
 }
 
-/** Upcoming calendar events from a single HA calendar entity. */
+/**
+ * Upcoming calendar events from a single HA calendar entity.
+ *
+ * `fonts` roles: `title`, `primary`, `secondary`, `value`.
+ */
 export interface CalendarWidget extends WidgetBase {
   type: "calendar";
   /** HA calendar entity ID (e.g. "calendar.family"). */
@@ -487,11 +556,60 @@ export interface CalendarWidget extends WidgetBase {
   days_ahead?: number;
   /** Decorative frame style. */
   card_style?: CardStyle;
-  /** When true, renders the event date/time value in bold. */
-  bold_value?: boolean;
+  /**
+   * Stroke width in pixels of the light-gray dividers between rows,
+   * applied on every display type.  ``0`` hides the dividers.
+   * Default: 1.
+   */
+  divider_width?: number;
+  /**
+   * Maximum row height in pixels.  Rows shrink to fit a short widget
+   * but never grow beyond this; when ``h`` is omitted each row is
+   * this tall.  Default: the display's density-scaled
+   * `DisplayConfig.row_height` (56 px at 212 ppi).
+   */
+  row_height?: number;
+  /**
+   * When true, omits the icon circle on every row and starts the
+   * row text at the left padding.  Default: false.
+   */
+  hide_icon?: boolean;
 }
 
-/** Waste-collection schedule widget with relative dates. */
+/**
+ * Weekly calendar grid with one column per day and a time axis,
+ * showing the events of one or more HA calendar entities for the
+ * current week. The first column follows the dashboard's first-weekday
+ * setting.
+ *
+ * `fonts` roles: `title`, `day`, `hour`, `time`, `event`.
+ */
+export interface WeekCalendarWidget extends WidgetBase {
+  type: "week_calendar";
+  /**
+   * HA calendar entity IDs (e.g. ["calendar.family"]). Events of all
+   * listed calendars are merged. A single ID string is also accepted.
+   */
+  entity?: string | string[];
+  /** Optional header text shown above the grid. */
+  title?: string;
+  /**
+   * First hour (0-23) shown on the time axis. Events that end before
+   * it are stacked at the top of their day's column. Defaults to 8.
+   */
+  start_hour?: number;
+  /**
+   * Hour (1-24) at which the time axis ends. Events that start after
+   * it are stacked at the bottom of their day's column. Defaults to 20.
+   */
+  end_hour?: number;
+}
+
+/**
+ * Waste-collection schedule widget with relative dates.
+ *
+ * `fonts` roles: `title`, `primary`, `secondary`, `value`.
+ */
 export interface WasteScheduleWidget extends WidgetBase {
   type: "waste_schedule";
   /** Optional card header text. */
@@ -509,11 +627,31 @@ export interface WasteScheduleWidget extends WidgetBase {
   show_all?: boolean;
   /** Decorative frame style. */
   card_style?: CardStyle;
-  /** When true, renders the date value in bold. */
-  bold_value?: boolean;
+  /**
+   * Stroke width in pixels of the light-gray dividers between rows,
+   * applied on every display type.  ``0`` hides the dividers.
+   * Default: 1.
+   */
+  divider_width?: number;
+  /**
+   * Maximum row height in pixels.  Rows shrink to fit a short widget
+   * but never grow beyond this; when ``h`` is omitted each row is
+   * this tall.  Default: the display's density-scaled
+   * `DisplayConfig.row_height` (56 px at 212 ppi).
+   */
+  row_height?: number;
+  /**
+   * When true, omits the icon circle on every row and starts the
+   * row text at the left padding.  Default: false.
+   */
+  hide_icon?: boolean;
 }
 
-/** Single-entity tile card modelled after the HA Tile card. */
+/**
+ * Single-entity tile card modelled after the HA Tile card.
+ *
+ * `fonts` roles: `primary`, `secondary`.
+ */
 export interface TileWidget extends WidgetBase {
   type: "tile";
   /** HA entity ID to display (required at runtime). */
@@ -540,8 +678,12 @@ export interface TileWidget extends WidgetBase {
   card_style?: CardStyle;
   /** Icon circle rendering mode (auto-selected when absent). */
   icon_style?: IconStyle;
-  /** When true, renders the secondary state line in bold. */
-  bold_value?: boolean;
+  /**
+   * Exact number of decimal places to show for the secondary
+   * state value. Overrides HA's `display_precision` and
+   * device-class defaults when set.
+   */
+  decimals?: number;
   /**
    * HA conditions that trigger inverted rendering (black card,
    * white text) as an e-ink attention signal. Same condition
@@ -585,6 +727,8 @@ export interface HeadingBadge {
  * the centre, and optional entity badges flowing from the right edge.
  * Use this widget instead of the deprecated TextWidget for section
  * headers.
+ *
+ * `fonts` roles: `heading`, `badge`.
  */
 export interface HeadingWidget extends WidgetBase {
   type: "heading";
@@ -595,8 +739,8 @@ export interface HeadingWidget extends WidgetBase {
   heading?: string;
   /**
    * Visual style for the heading text.
-   * - ``"title"`` — large Roboto Medium in black (default).
-   * - ``"subtitle"`` — smaller Roboto Regular in gray.
+   * - ``"title"`` — large regular-weight text in black (default).
+   * - ``"subtitle"`` — smaller regular text in gray.
    */
   heading_style?: "title" | "subtitle";
   /**
@@ -650,6 +794,9 @@ export type EntitiesRowConfig =
  * rows show an icon circle, primary name, and right-aligned state
  * value; divider rows show a gray horizontal line; section rows
  * show a gray sub-heading label.
+ *
+ * `fonts` roles: `title`, `row_primary`, `row_secondary`, `value`,
+ * `section`.
  */
 export interface EntitiesWidget extends WidgetBase {
   type: "entities";
@@ -673,13 +820,37 @@ export interface EntitiesWidget extends WidgetBase {
    * - ``"none"`` — no circle; icon glyph rendered without decoration.
    */
   icon_style?: IconStyle;
-  /** When true, renders each row's state value in bold. */
-  bold_value?: boolean;
+  /**
+   * Exact number of decimal places to show for every row's value.
+   * Overrides HA's `display_precision` and device-class defaults
+   * when set.
+   */
+  decimals?: number;
+  /**
+   * Stroke width in pixels of the light-gray dividers between rows,
+   * applied on every display type.  ``0`` hides the dividers.
+   * Default: 1.
+   */
+  divider_width?: number;
+  /**
+   * Maximum row height in pixels.  Rows shrink to fit a short widget
+   * but never grow beyond this; when ``h`` is omitted each row is
+   * this tall.  Default: the display's density-scaled
+   * `DisplayConfig.row_height` (56 px at 212 ppi).
+   */
+  row_height?: number;
+  /**
+   * When true, omits the icon circle on every row and starts the
+   * row text at the left padding.  Default: false.
+   */
+  hide_icon?: boolean;
 }
 
 /**
  * Single-entity display with large state value, modelled after
  * HA's Entity card (``hui-entity-card.ts``).
+ *
+ * `fonts` roles: `value`, `name`, `unit`.
  */
 export interface EntityWidget extends WidgetBase {
   type: "entity";
@@ -710,8 +881,12 @@ export interface EntityWidget extends WidgetBase {
    * - ``"none"`` — no circle; icon glyph rendered without decoration.
    */
   icon_style?: IconStyle;
-  /** When true, renders the state value in bold. */
-  bold_value?: boolean;
+  /**
+   * Exact number of decimal places to show for the value.
+   * Overrides HA's `display_precision` and device-class defaults
+   * when set.
+   */
+  decimals?: number;
   /**
    * Position of the name relative to the value+unit line.
    * Defaults to `"bottom"`.
@@ -739,6 +914,8 @@ export interface SensorLimits {
 /**
  * Single-entity sensor with optional history sparkline graph,
  * modelled after HA's Sensor card (``hui-sensor-card.ts``).
+ *
+ * `fonts` roles: `name`, `value`, `unit`, `axis`.
  */
 export interface SensorWidget extends WidgetBase {
   type: "sensor";
@@ -800,8 +977,12 @@ export interface SensorWidget extends WidgetBase {
    * - ``"none"`` — no circle; icon glyph rendered without decoration.
    */
   icon_style?: IconStyle;
-  /** When true, renders the state value in bold. */
-  bold_value?: boolean;
+  /**
+   * Exact number of decimal places to show for the value.
+   * Overrides HA's `display_precision` and device-class defaults
+   * when set.
+   */
+  decimals?: number;
 }
 
 /** One threshold-based color band on the gauge track. */
@@ -828,6 +1009,8 @@ export interface GaugeSegment {
  * Circular arc gauge showing a sensor value on a 270°, 180°, or
  * 360° track with optional color segments, fill arc or needle
  * indicator, and segment labels.
+ *
+ * `fonts` roles: `value`, `unit`, `name`, `segment`.
  */
 export interface GaugeWidget extends WidgetBase {
   type: "gauge";
@@ -882,11 +1065,6 @@ export interface GaugeWidget extends WidgetBase {
    * Segments must be configured via YAML.
    */
   segments?: GaugeSegment[];
-  /**
-   * When true, renders the center value text in bold instead of
-   * medium weight.
-   */
-  bold_value?: boolean;
 }
 
 /**
@@ -981,6 +1159,8 @@ export interface GraphEntityConfig {
  * Multiple entities can be overlaid with distinct dash patterns
  * (line mode) or fill shades (bar mode) and an optional secondary
  * Y-axis.
+ *
+ * `fonts` roles: `name`, `value`, `unit`, `axis`.
  */
 export interface GraphWidget extends WidgetBase {
   type: "graph";
@@ -993,6 +1173,13 @@ export interface GraphWidget extends WidgetBase {
   entity?: string;
   /** Override display name; falls back to the entity's friendly_name. */
   name?: string;
+  /**
+   * Header title override.  When set, the header shows this text
+   * instead of the first series' name; an empty or missing title
+   * keeps the first series' name as the header.  Lets the graph
+   * title differ from the first series' legend label.
+   */
+  title?: string;
   /** MDI icon name override (e.g. ``"mdi:thermometer"``). */
   icon?: string;
   /** Unit string override shown next to the current state value. */
@@ -1106,9 +1293,9 @@ export interface GraphWidget extends WidgetBase {
    */
   smoothing?: boolean;
   /**
-   * Show Y-axis min/max value labels on the left edge and X-axis
-   * time labels (oldest and newest timestamps) at the bottom of
-   * the graph area.  Default: ``true``.
+   * Show Y-axis value labels on the left edge and X-axis time
+   * labels at the bottom of the graph area (see ``x_axis_ticks``
+   * and ``y_axis_ticks``).  Default: ``true``.
    */
   show_labels?: boolean;
   /**
@@ -1117,6 +1304,39 @@ export interface GraphWidget extends WidgetBase {
    * Default: ``false``.
    */
   show_extrema?: boolean;
+  /**
+   * Maximum number of X-axis (time) labels.  ``2`` shows only the
+   * oldest and newest time at the graph edges; larger values add
+   * labels at round times (bar charts label evenly spaced bars),
+   * reduced automatically so labels never overlap.  Default: ``2``.
+   */
+  x_axis_ticks?: number;
+  /**
+   * Maximum number of Y-axis (value) labels.  ``2`` shows only the
+   * min and max; larger values use round steps (1, 2, 2.5, 5 × 10ⁿ).
+   * Also applies to the secondary axis.  Default: ``2``.
+   */
+  y_axis_ticks?: number;
+  /** Draw short tick marks below the graph at each X label. */
+  x_axis_tick_marks?: boolean;
+  /** Draw short tick marks beside the graph at each Y label. */
+  y_axis_tick_marks?: boolean;
+  /**
+   * Draw vertical grid lines at each X label (light gray; dotted
+   * black on 2-level displays).  Default: ``false``.
+   */
+  x_axis_grid?: boolean;
+  /**
+   * Draw horizontal grid lines at each Y label (light gray; dotted
+   * black on 2-level displays).  Default: ``false``.
+   */
+  y_axis_grid?: boolean;
+  /**
+   * Append the unit to every Y label: the ``unit`` override or the
+   * first primary entity's unit on the left axis, the first
+   * secondary entity's unit on the right axis.  Default: ``false``.
+   */
+  y_axis_unit?: boolean;
   /**
    * Data grouping strategy applied before bucketing.
    * ``"interval"`` uses the configured ``points_per_hour``;
@@ -1223,8 +1443,54 @@ export interface GraphWidget extends WidgetBase {
   threshold_4_color?: string;
   /** Explicit grayscale shade override for threshold 4. */
   threshold_4_shade?: "black" | "dark" | "medium" | "light";
-  /** When true, renders the header value text in bold. */
-  bold_value?: boolean;
+  /**
+   * Exact number of decimal places to show for the header
+   * value(s). Overrides HA's `display_precision` and device-class
+   * defaults when set.
+   */
+  decimals?: number;
+}
+
+/**
+ * Hourly temperature curve with forecast icons and day markers.
+ *
+ * `fonts` roles: `day`, `hour`, `grid`, `precip`.
+ */
+export interface MeteogramWidget extends WidgetBase {
+  type: "meteogram";
+  /** HA weather entity ID; must support hourly forecasts. */
+  entity?: string;
+  /** Hourly forecast window in hours, clamped to 8-120. Default: 24. */
+  hours?: number;
+  /** Show the cloud-coverage band above the curve. Default: true. */
+  show_cloud_cover?: boolean;
+  /** Show precipitation bars below the curve. Default: true. */
+  show_precipitation?: boolean;
+  /**
+   * Format of the day-boundary labels: `"weekday_month_day"`
+   * (default, e.g. "Sun Oct 18"), `"weekday_abbrev"` ("Sun"),
+   * `"weekday_wide"` ("Sunday"), or `"month_day"` ("Oct 18").
+   */
+  day_label_format?:
+    | "weekday_month_day"
+    | "weekday_abbrev"
+    | "weekday_wide"
+    | "month_day";
+  /**
+   * Curve stroke width in pixels.  Omitted keeps the height-derived
+   * width, so existing configs are unaffected.
+   */
+  line_width?: number;
+  /**
+   * Smooth the temperature curve with midpoint Q-curve
+   * interpolation.  When false, the curve is drawn as straight
+   * segments between hourly points.  Default: true.
+   */
+  smoothing?: boolean;
+  /** Draw a light-gray filled area below the curve. Default: false. */
+  show_fill?: boolean;
+  /** Decorative frame style. */
+  card_style?: CardStyle;
 }
 
 export type Widget =
@@ -1235,13 +1501,15 @@ export type Widget =
   | DeviceBatteryWidget
   | WasteScheduleWidget
   | CalendarWidget
+  | WeekCalendarWidget
   | TileWidget
   | HeadingWidget
   | EntitiesWidget
   | EntityWidget
   | SensorWidget
   | GaugeWidget
-  | GraphWidget;
+  | GraphWidget
+  | MeteogramWidget;
 
 /** Registry entry for one widget type shown in the widget picker grid. */
 export interface WidgetTypeMeta {

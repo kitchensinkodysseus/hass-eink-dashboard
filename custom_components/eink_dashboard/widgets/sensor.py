@@ -16,18 +16,21 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-from ..const import DEFAULT_ROW_H, PADDING, DisplayConfig, Widget
+from ..const import DEFAULT_ROW_H, PADDING, DisplayConfig
 from ._helpers import (
-    _color_context,
     _entity_info_context,
+    _missing_entity_context,
     _widget_dim,
 )
 
+if TYPE_CHECKING:
+    from ..widget_config import SensorLimits, SensorWidget
+
 
 def _build_sensor_context(
-    widget: Widget,
+    widget: SensorWidget,
     config: DisplayConfig,
 ) -> dict[str, object]:
     """Build Jinja2 template context for the sensor widget.
@@ -68,8 +71,17 @@ def _build_sensor_context(
             the graph line; default ``False``),
             ``hide_state`` (suppress the large value/unit text in
             the info section; default ``False``),
-            ``bold_value`` (render the value text in bold; default
-            ``False``),
+            ``fonts`` (per-role font overrides — a mapping of role
+            name to ``{"size": int, "weight": str}``; roles are
+            ``"name"``, ``"value"``, and ``"unit"``.  An omitted
+            ``size`` keeps the widget's derived size scaled by the
+            display-level ``font_scale``; an explicit ``size`` is
+            absolute.  An omitted ``weight`` keeps the role's
+            default: name ``"medium"``, value and unit
+            ``"regular"``),
+            ``decimals`` (exact number of decimal places to show;
+            overrides HA's ``display_precision`` and device-class
+            defaults),
             ``hide_icon`` (suppress the icon; default ``False``),
             ``hide_name`` (suppress the entity name text; default
             ``False``),
@@ -79,8 +91,8 @@ def _build_sensor_context(
 
     Returns:
         Template context dict consumed by ``sensor.svg.j2``.
-        Returns ``{"w": …, "h": …, "has_entity": False,
-        **_color_context()}`` when the entity is missing.
+        Returns ``_missing_entity_context(w, h)`` when the
+        entity is missing.
         Full context includes widget dimensions, card style,
         metrics, colors, icon geometry, header text, info section
         value/unit, and graph polyline/fill data.
@@ -92,7 +104,7 @@ def _build_sensor_context(
     graph: str | None = widget.get("graph")
     detail: int = int(float(widget.get("detail", 1)))
     hours_to_show: int = int(float(widget.get("hours_to_show", 24)))
-    limits: dict[str, float] | None = widget.get("limits")
+    limits: SensorLimits | None = widget.get("limits")
     if limits is None:
         # The frontend stores Y-axis bounds as flat keys rather
         # than a nested dict (ha-form does not support nested
@@ -120,12 +132,7 @@ def _build_sensor_context(
 
     ctx = _entity_info_context(widget, config, entity_h, svg_w, svg_h)
     if ctx is None:
-        return {
-            "w": svg_w,
-            "h": svg_h,
-            "has_entity": False,
-            **_color_context(),
-        }
+        return _missing_entity_context(svg_w, svg_h)
 
     # name_x = x_off + lpad (left content edge); icon_cx +
     # icon_r = svg_w - r_inset - rpad (right content edge

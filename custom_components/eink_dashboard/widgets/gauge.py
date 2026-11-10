@@ -27,7 +27,7 @@ from ..const import (
     DEFAULT_ROW_H,
     PADDING,
     DisplayConfig,
-    Widget,
+    FontWeight,
     color_to_hex,
 )
 from ..svg_render import _mdi_svg_filter
@@ -36,11 +36,15 @@ from ._helpers import (
     _color_context,
     _fmt,
     _metrics_context,
+    _missing_entity_context,
+    _resolve_entity,
     _widget_dim,
 )
 
 if TYPE_CHECKING:
     import markupsafe
+
+    from ..widget_config import GaugeWidget
 
 # Gauge type arc configuration: (start_deg, end_deg, arc_angle).
 # Standard: 270° arc with gap at the bottom (lower-left to
@@ -168,7 +172,7 @@ def _match_segment(
 
 
 def _build_gauge_context(
-    widget: Widget,
+    widget: GaugeWidget,
     config: DisplayConfig,
 ) -> dict[str, object]:
     """Build Jinja2 template context for the gauge widget.
@@ -191,7 +195,9 @@ def _build_gauge_context(
             ``max`` (maximum value; default 100),
             ``unit`` (unit string override),
             ``show_unit`` (display unit; default ``True``),
-            ``decimals`` (decimal places to display),
+            ``decimals`` (exact number of decimal places to
+            display; overrides HA's ``display_precision`` and
+            device-class defaults),
             ``attribute`` (HA attribute key to display instead of
             state),
             ``needle`` (needle-dot mode; default ``False``),
@@ -199,28 +205,33 @@ def _build_gauge_context(
             ``"full"``; default ``"standard"``),
             ``header_position`` (``"bottom"`` / ``"top"``;
             default ``"bottom"``),
-            ``bold_value`` (render the value text in bold instead
-            of medium weight; default ``False``),
+            ``fonts`` (per-role font overrides — a mapping of role
+            name to ``{"size": int, "weight": str}``; roles are
+            ``"value"``, ``"unit"``, ``"name"``, and ``"segment"``
+            (the segment label).  An omitted ``size`` keeps the
+            widget's derived size scaled by the display-level
+            ``font_scale``; an explicit ``size`` is absolute.  An
+            omitted ``weight`` keeps the role's default: value
+            ``"medium"``, unit ``"regular"``, name ``"regular"``,
+            segment ``"regular"``),
             ``card_style``, ``segments``, ``x``, ``w``, ``h``.
         config: Display config with ``width``, ``states``, and
             ``display_levels``.
 
     Returns:
         Template context dict consumed by ``gauge.svg.j2``.
-        Returns ``{"w": …, "h": …, "has_entity": False,
-        **_color_context()}`` when the entity is missing from the
-        state dict.
+        Returns ``_missing_entity_context(w, h)`` when the
+        entity is missing from the state dict.
     """
-    from ..render import _compute_metrics
+    from ..render import _compute_metrics, _font_weight_svg, resolve_font
 
     x = widget.get("x", PADDING)
     w = _widget_dim(widget, "w", config["width"] - x)
     # Default: square gauge (height equals width).
     h = _widget_dim(widget, "h", w)
 
-    entity_id: str = widget.get("entity", "")
-    states = config.get("states", {})
     display_levels = config.get("display_levels", 16)
+    font_scale: float = config.get("font_scale", 1.0)
     card_style: str = widget.get("card_style", DEFAULT_CARD_STYLE)
     gauge_type: str = widget.get("gauge_type", "standard")
     header_position: str = widget.get("header_position", "bottom")
@@ -228,42 +239,26 @@ def _build_gauge_context(
     min_val: float = float(widget.get("min", 0))
     max_val: float = float(widget.get("max", 100))
     segments_raw: list[object] = list(widget.get("segments", []))
-    name_override = widget.get("name")
     icon_override = widget.get("icon")
     unit_override = widget.get("unit")
     show_unit: bool = bool(widget.get("show_unit", True))
-    decimals = widget.get("decimals")
     attribute: str | None = widget.get("attribute")
-    value_bold: bool = widget.get("bold_value", False)
 
     # Missing entity → blank white canvas.
-    state = states.get(entity_id) if entity_id else None
-    if state is None:
-        return {
-            "w": w,
-            "h": h,
-            "has_entity": False,
-            **_color_context(),
-        }
+    entity = _resolve_entity(widget, config)
+    if entity is None:
+        return _missing_entity_context(w, h)
 
-    attrs: dict[str, object] = state.get("attributes", {})
+    attrs = entity.attrs
 
     # --- Value ---
     if attribute is not None:
         raw_attr = attrs.get(attribute)
         state_val = str(raw_attr) if raw_attr is not None else "0"
     else:
-        state_val = str(state.get("state", "0"))
+        state_val = entity.state_val
 
-    # Apply optional decimal rounding before locale formatting.
-    if decimals is not None:
-        try:
-            rounded = f"{float(state_val):.{int(decimals)}f}"
-        except (ValueError, TypeError):
-            rounded = state_val
-    else:
-        rounded = state_val
-    formatted_val = _fmt(rounded, config)
+    formatted_val = _fmt(state_val, config, entity.precision)
 
     # --- Unit ---
     if show_unit:
@@ -274,13 +269,6 @@ def _build_gauge_context(
     else:
         unit_text = ""
 
-    # --- Name ---
-    name_text: str = (
-        str(name_override)
-        if name_override is not None
-        else str(attrs.get("friendly_name", entity_id))
-    )
-
     # --- Card insets ---
     # Use DEFAULT_ROW_H for consistent border proportions across
     # widget sizes (gauge has no natural row_h concept).
@@ -289,7 +277,15 @@ def _build_gauge_context(
 
     # --- Gauge geometry ---
     # Name label: height proportional to the total widget height.
-    name_font_sz = max(10, round(h * 0.07))
+    # Resolved before the label band is derived so an enlarged name
+    # font grows the band with it rather than spilling over the arc.
+    name_font_sz, name_weight = resolve_font(
+        widget,
+        "name",
+        max(10, round(h * 0.07)),
+        FontWeight.REGULAR,
+        scale=font_scale,
+    )
     name_h = round(name_font_sz * 1.8)
 
     # Content area width after horizontal card insets.
@@ -437,16 +433,34 @@ def _build_gauge_context(
 
     # --- Text layout ---
     # Value: large text centred at the arc centre.
-    value_font_sz = max(12, round(radius * 0.45))
+    value_font_sz, value_weight = resolve_font(
+        widget,
+        "value",
+        max(12, round(radius * 0.45)),
+        FontWeight.MEDIUM,
+        scale=font_scale,
+    )
     value_x = cx
     value_y = cy
 
     # Unit: smaller text, baseline below the value glyph.
-    unit_font_sz = max(10, round(radius * 0.22))
+    unit_font_sz, unit_weight = resolve_font(
+        widget,
+        "unit",
+        max(10, round(radius * 0.22)),
+        FontWeight.REGULAR,
+        scale=font_scale,
+    )
     unit_y = cy + value_font_sz // 2 + 4
 
     # Segment label: below the unit.
-    seg_label_font_sz = max(10, round(radius * 0.20))
+    seg_label_font_sz, seg_label_weight = resolve_font(
+        widget,
+        "segment",
+        max(10, round(radius * 0.20)),
+        FontWeight.REGULAR,
+        scale=font_scale,
+    )
     seg_label_y = unit_y + unit_font_sz + 2
 
     # Icon position: above the value text.
@@ -487,25 +501,28 @@ def _build_gauge_context(
         "value_x": value_x,
         "value_y": value_y,
         "value_font_sz": value_font_sz,
-        "value_bold": value_bold,
+        "value_weight": _font_weight_svg(value_weight),
         # Unit text.
         "unit_text": unit_text,
         "unit_x": cx,
         "unit_y": unit_y,
         "unit_font_sz": unit_font_sz,
+        "unit_weight": _font_weight_svg(unit_weight),
         # Segment label.
         "segment_label": segment_label,
         "seg_label_x": cx,
         "seg_label_y": seg_label_y,
         "seg_label_font_sz": seg_label_font_sz,
+        "seg_label_weight": _font_weight_svg(seg_label_weight),
         # Icon.
         "has_icon": has_icon,
         "icon_svg": icon_svg,
         "icon_x": icon_x,
         "icon_y": icon_y,
         # Name label.
-        "name_text": name_text,
+        "name_text": entity.name,
         "name_x": cx,
         "name_y": name_y,
         "name_font_sz": name_font_sz,
+        "name_weight": _font_weight_svg(name_weight),
     }

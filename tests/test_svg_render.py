@@ -15,6 +15,7 @@
 """Tests for the SVG rendering pipeline."""
 
 import io
+import re
 
 import jinja2
 import pytest
@@ -22,11 +23,14 @@ import resvg_py
 from PIL import Image
 
 from custom_components.eink_dashboard.svg_render import (
+    _FONTS_DIR,
     _TEMPLATE_DIR,
+    _fit_width_filter,
     _jinja_env,
     _make_jinja_env,
     _mdi_svg_filter,
     _svg_to_png,
+    _text_width_filter,
     _weather_svg_filter,
 )
 from tests.helpers import (
@@ -52,11 +56,11 @@ def test_resvg_rasterises_simple_svg():
 
 
 def test_svg_to_png_produces_valid_png():
-    """Verify _svg_to_png() rasterises Roboto text to a valid PNG."""
+    """Verify _svg_to_png() rasterises bundled TRMNL text to PNG."""
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">'
         '<rect width="200" height="80" fill="white"/>'
-        '<text x="10" y="50" font-family="Roboto" font-size="24">Test</text>'
+        '<text x="10" y="50" font-family="TRMNL21" font-size="24">Test</text>'
         "</svg>"
     )
     result = _svg_to_png(svg, 200, 80)
@@ -69,7 +73,7 @@ def test_svg_to_png_extra_font_dirs_accepted(tmp_path):
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">'
         '<rect width="200" height="80" fill="white"/>'
-        '<text x="10" y="50" font-family="Roboto" font-size="24">Test</text>'
+        '<text x="10" y="50" font-family="TRMNL21" font-size="24">Test</text>'
         "</svg>"
     )
     result = _svg_to_png(svg, 200, 80, extra_font_dirs=[str(tmp_path)])
@@ -82,7 +86,7 @@ def test_svg_to_png_no_extra_font_dirs_still_works():
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">'
         '<rect width="200" height="80" fill="white"/>'
-        '<text x="10" y="50" font-family="Roboto" font-size="24">Test</text>'
+        '<text x="10" y="50" font-family="TRMNL21" font-size="24">Test</text>'
         "</svg>"
     )
     result = _svg_to_png(svg, 200, 80, extra_font_dirs=None)
@@ -94,7 +98,7 @@ def test_svg_to_png_use_system_fonts_produces_valid_png():
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">'
         '<rect width="200" height="80" fill="white"/>'
-        '<text x="10" y="50" font-family="Roboto" font-size="24">Test</text>'
+        '<text x="10" y="50" font-family="TRMNL21" font-size="24">Test</text>'
         "</svg>"
     )
     result = _svg_to_png(svg, 200, 80, use_system_fonts=True)
@@ -117,6 +121,11 @@ def test_svg_to_png_default_skips_system_fonts(monkeypatch):
     )
     _svg_to_png("<svg/>", 10, 10)
     assert calls[0]["skip_system_fonts"] is True
+    assert calls[0]["font_dirs"] == [
+        str(_FONTS_DIR / "TRMNL"),
+        str(_FONTS_DIR / "Roboto"),
+        str(_FONTS_DIR / "Inter"),
+    ]
 
 
 def test_svg_to_png_use_system_fonts_disables_skip(monkeypatch):
@@ -179,6 +188,36 @@ def test_mdi_path_traversal_raises():
     """Verify a path traversal icon name raises ValueError."""
     with pytest.raises(ValueError):
         _mdi_svg_filter("../../etc/passwd", 32)
+
+
+def test_text_width_filter_grows_with_text_and_weight():
+    """Verify text_width measures longer and bolder text as wider."""
+    short = _text_width_filter("Mon", 20)
+    long = _text_width_filter("Monday 10:00", 20)
+    bold = _text_width_filter("Monday 10:00", 20, "bold")
+    assert 0 < short < long < bold
+    assert _text_width_filter("", 20) == 0
+
+
+def test_fit_width_filter_keeps_text_that_fits():
+    """Verify fit_width returns text unchanged when it fits."""
+    assert _fit_width_filter("Doctor", 500, 20) == "Doctor"
+
+
+def test_fit_width_filter_truncates_with_ellipsis():
+    """Verify fit_width shortens text with an ellipsis to fit."""
+    text = "A very long calendar event summary"
+    result = _fit_width_filter(text, 100, 20, "medium")
+    assert result.endswith("\u2026")
+    assert text.startswith(result[:-1])
+    assert _text_width_filter(result, 20, "medium") <= 100
+
+
+def test_fit_width_filter_empty_when_no_room():
+    """Verify fit_width returns an empty string for zero or negative
+    widths, so a dominant value can claim the whole row."""
+    assert _fit_width_filter("Doctor", 0, 20) == ""
+    assert _fit_width_filter("Doctor", -30, 20) == ""
 
 
 def test_unknown_weather_condition_raises():
@@ -501,3 +540,26 @@ def test_chip_with_active_icon_fills_circle(render_macro) -> None:
         low=100,
         high=160,
     )
+
+
+def test_macro_imports_pass_render_context():
+    """Verify every template imports _macros.svg.j2 ``with context``.
+
+    The macros read ``font_family_name`` from the caller's context;
+    without ``with context`` it is undefined and text renders in the
+    wrong font family.
+    """
+    import_re = re.compile(
+        r'\{%-?\s*from\s+"_macros\.svg\.j2"\s+import\s+(.*?)-?%\}',
+        re.DOTALL,
+    )
+    checked = 0
+    for path in sorted(_TEMPLATE_DIR.glob("*.svg.j2")):
+        if path.name == "_macros.svg.j2":
+            continue
+        for match in import_re.finditer(path.read_text()):
+            checked += 1
+            assert match.group(1).rstrip().endswith("with context"), (
+                f"{path.name}: _macros.svg.j2 import lacks 'with context'"
+            )
+    assert checked > 0

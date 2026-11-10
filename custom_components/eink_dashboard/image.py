@@ -44,29 +44,25 @@ from PIL import Image
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
+
+    from .data import EinkDashboardConfigEntry
 
 from . import (
     _async_get_locale,
+    _enrich_display_precision,
     _enrich_entity_icons,
     _fetch_calendar_events,
     _fetch_forecasts,
     _fetch_history,
+    _fetch_week_calendar_events,
+    _ha_time_zone,
+    build_display_config,
 )
-from .battery import resolve_battery_level
 from .const import (
-    DEFAULT_DISPLAY_LEVELS,
-    DEFAULT_DITHER_ALGORITHM,
-    DEFAULT_EXPOSURE,
-    DEFAULT_HEIGHT,
-    DEFAULT_MEASURED_PALETTE,
-    DEFAULT_OPTIMIZE,
-    DEFAULT_SATURATION,
     DEFAULT_UPDATE_INTERVAL,
-    DEFAULT_USE_SYSTEM_FONTS,
-    DEFAULT_WIDTH,
     DOMAIN,
+    WebhookTarget,
     WidgetType,
 )
 from .exceptions import RenderNotReady
@@ -107,15 +103,14 @@ def _is_image_blank(image_bytes: bytes) -> bool:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: EinkDashboardConfigEntry,
     async_add_entities: Any,
 ) -> None:
     """Create and register the EinkDashboardImage entity."""
     _LOGGER.debug("image async_setup_entry: %s", entry.entry_id)
     entity = EinkDashboardImage(hass, entry)
-    widgets = hass.data[DOMAIN][entry.entry_id]["widgets"]
-    entity.set_widgets(widgets)
-    hass.data[DOMAIN][entry.entry_id]["entity"] = entity
+    entity.set_widgets(entry.runtime_data.widgets)
+    entry.runtime_data.entity = entity
     async_add_entities([entity])
     _LOGGER.debug(
         "image async_setup_entry: entity added for %s", entry.entry_id
@@ -130,7 +125,7 @@ class EinkDashboardImage(ImageEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        entry: ConfigEntry,
+        entry: EinkDashboardConfigEntry,
     ) -> None:
         """Initialise the entity from the config entry."""
         super().__init__(hass)
@@ -284,55 +279,26 @@ class EinkDashboardImage(ImageEntity):
             async with self._refresh_lock:
                 states = self._build_states()
                 await self._async_enrich_entity_icons(states)
+                await self._async_enrich_display_precision(states)
                 await self._async_fetch_forecasts(states)
                 await self._async_fetch_history(states)
                 await self._async_fetch_calendar_events(states)
-                config = {
-                    "width": self._entry.options.get("width", DEFAULT_WIDTH),
-                    "height": self._entry.options.get(
-                        "height", DEFAULT_HEIGHT
-                    ),
-                    "rotation": self._entry.options.get("rotation", 0),
-                    "optimize": self._entry.options.get(
-                        "optimize", DEFAULT_OPTIMIZE
-                    ),
-                    "display_levels": self._entry.options.get(
-                        "display_levels", DEFAULT_DISPLAY_LEVELS
-                    ),
-                    "exposure": self._entry.options.get(
-                        "exposure", DEFAULT_EXPOSURE
-                    ),
-                    "saturation": self._entry.options.get(
-                        "saturation", DEFAULT_SATURATION
-                    ),
-                    "dither_algorithm": self._entry.options.get(
-                        "dither_algorithm", DEFAULT_DITHER_ALGORITHM
-                    ),
-                    "measured_palette": self._entry.options.get(
-                        "measured_palette", DEFAULT_MEASURED_PALETTE
-                    ),
-                    "color_scheme": self._entry.options.get("color_scheme"),
-                    "font_dir": self._entry.options.get("font_dir", ""),
-                    "use_system_fonts": self._entry.options.get(
-                        "use_system_fonts", DEFAULT_USE_SYSTEM_FONTS
-                    ),
-                    "number_format": number_format,
-                    "language": language,
-                    "first_weekday": first_weekday,
-                    "date_format": date_format,
-                    "time_format": time_format,
-                    "states": states,
-                }
-                level, is_charging = resolve_battery_level(
-                    self._entry.options.get("battery_entity_id"),
+                await self._async_fetch_week_calendar_events(states)
+                config = build_display_config(
+                    self._entry.options,
                     states,
-                    self.hass.data[DOMAIN][self._entry.entry_id].get(
-                        "battery_sensor"
+                    number_format=number_format,
+                    language=language,
+                    first_weekday=first_weekday,
+                    date_format=date_format,
+                    time_format=time_format,
+                    time_zone=_ha_time_zone(self.hass),
+                    battery_entity_id=self._entry.options.get(
+                        "battery_entity_id"
                     ),
+                    battery_sensor=self._entry.runtime_data.battery_sensor,
+                    for_png=True,
                 )
-                if level is not None:
-                    config["device_battery_level"] = level
-                    config["device_battery_charging"] = is_charging
                 widgets = self._resolve_templates(self._widgets)
                 _LOGGER.debug(
                     "_async_refresh: rendering %d widgets at %dx%d",
@@ -365,7 +331,9 @@ class EinkDashboardImage(ImageEntity):
                     self._etag = f'"{hashlib.sha256(new_bytes).hexdigest()}"'
                     self._attr_image_last_updated = dt_util.utcnow()
                     self.async_write_ha_state()
-                    webhook_urls = self._entry.options.get("webhook_urls", [])
+                    webhook_urls: list[WebhookTarget] = (
+                        self._entry.options.get("webhook_urls", [])
+                    )
                     now = time.monotonic()
                     if (
                         not first_render
@@ -452,8 +420,23 @@ class EinkDashboardImage(ImageEntity):
         """
         await _enrich_entity_icons(self.hass, states)
 
+    async def _async_enrich_display_precision(
+        self, states: dict[str, Any]
+    ) -> None:
+        """Inject HA's configured display precision into sensor states.
+
+        Delegates to the module-level ``_enrich_display_precision``
+        so the logic is shared with the WebSocket preview handlers.
+
+        Args:
+            states: Mutable states dict; ``display_precision`` is
+                injected in-place for sensor entities that have one
+                configured in HA.
+        """
+        await _enrich_display_precision(self.hass, states)
+
     async def _async_fetch_forecasts(self, states: dict[str, Any]) -> None:
-        """Fetch daily forecasts for weather widgets and inject into states.
+        """Fetch forecasts for weather/meteogram widgets into states.
 
         Delegates to the module-level ``_fetch_forecasts`` so the
         logic is shared with the WebSocket preview handlers.
@@ -486,6 +469,21 @@ class EinkDashboardImage(ImageEntity):
                 in-place for calendar entities.
         """
         await _fetch_calendar_events(self.hass, self._widgets, states)
+
+    async def _async_fetch_week_calendar_events(
+        self, states: dict[str, Any]
+    ) -> None:
+        """Fetch a week of events for week calendar widgets into states.
+
+        Delegates to the module-level ``_fetch_week_calendar_events``
+        so the logic is shared with the WebSocket preview handlers.
+
+        Args:
+            states: Mutable states dict; the events are injected
+                in-place under ``week_events`` for the calendars of
+                week calendar widgets.
+        """
+        await _fetch_week_calendar_events(self.hass, self._widgets, states)
 
     def _build_states(self) -> dict[str, Any]:
         """Snapshot all HA states as a plain dict for the renderer."""

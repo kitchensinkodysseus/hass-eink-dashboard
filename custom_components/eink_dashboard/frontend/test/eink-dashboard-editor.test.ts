@@ -28,6 +28,7 @@ import {
   getSummary,
 } from "../src/eink-dashboard-editor.js";
 import "../src/eink-dashboard-editor.js";
+import { ICON_FALLBACK } from "../src/eink-widget-picker.js";
 
 const DISPLAY = { width: 800, height: 480 };
 
@@ -71,9 +72,11 @@ describe("WIDGET_TYPES", () => {
     "calendar",
     "gauge",
     "graph",
+    "meteogram",
+    "week_calendar",
   ];
 
-  it("has all 13 widget types", () => {
+  it("has all 15 widget types", () => {
     expect(Object.keys(WIDGET_TYPES).sort()).toEqual(
       ALL_TYPES.sort()
     );
@@ -103,6 +106,14 @@ describe("WIDGET_TYPES", () => {
       expect(meta.icon.startsWith("mdi:")).toBe(true);
     }
   });
+
+  it("every widget type icon has an ICON_FALLBACK entry", () => {
+    // Ensures the picker grid shows a glyph, not a bare text
+    // fallback, when the browser can't load the MDI icon font.
+    for (const meta of Object.values(WIDGET_TYPES)) {
+      expect(ICON_FALLBACK).toHaveProperty(meta.icon);
+    }
+  });
 });
 
 // ── SCHEMAS ──────────────────────────────────────────────────────
@@ -122,10 +133,21 @@ describe("SCHEMAS", () => {
     "calendar",
     "gauge",
     "graph",
+    "meteogram",
+    "week_calendar",
   ];
 
-  it("has a schema builder for all 13 widget types", () => {
+  it("has a schema builder for all 15 widget types", () => {
     expect(Object.keys(SCHEMAS).sort()).toEqual(ALL_TYPES.sort());
+  });
+
+  it("row_height placeholder uses the display's scaled default", () => {
+    // Lists show the device's density-scaled row height, else 56.
+    for (const t of ["entities", "calendar", "waste_schedule"]) {
+      const scaled = SCHEMAS[t]({ ...DISPLAY, row_height: 33 });
+      expect(findField(scaled, "row_height")?.default).toBe(33);
+      expect(findField(SCHEMAS[t](DISPLAY), "row_height")?.default).toBe(56);
+    }
   });
 
   it("weather entity field uses domain filter 'weather'", () => {
@@ -165,6 +187,101 @@ describe("SCHEMAS", () => {
     const field = findField(schema, "humidity_entity");
     expect(field?.selector?.entity).toMatchObject({ domain: "sensor" });
   });
+
+  it("meteogram entity field uses domain filter 'weather'", () => {
+    const schema = SCHEMAS.meteogram(DISPLAY);
+    const entityField = findField(schema, "entity");
+    expect(entityField?.selector?.entity).toMatchObject({
+      domain: "weather",
+    });
+  });
+
+  it("meteogram hours field is clamped to 8-120", () => {
+    const schema = SCHEMAS.meteogram(DISPLAY);
+    const hoursField = findField(schema, "hours");
+    expect(hoursField?.selector?.number).toMatchObject({
+      min: 8,
+      max: 120,
+    });
+  });
+
+  it("meteogram show_precipitation field defaults to true", () => {
+    const schema = SCHEMAS.meteogram(DISPLAY);
+    const field = findField(schema, "show_precipitation");
+    expect(field?.default).toBe(true);
+    expect(field?.selector).toHaveProperty("boolean");
+  });
+
+  it("meteogram line options preserve the existing defaults", () => {
+    const schema = SCHEMAS.meteogram(DISPLAY);
+    const lineWidth = findField(schema, "line_width");
+    // No default: omitting the field keeps the height-derived width.
+    expect(lineWidth?.default).toBeUndefined();
+    expect(lineWidth?.selector?.number).toMatchObject({
+      min: 1,
+      max: 10,
+    });
+    expect(findField(schema, "smoothing")?.default).toBe(true);
+    expect(findField(schema, "show_fill")?.default).toBe(false);
+  });
+
+  it("meteogram day_label_format offers the four formats", () => {
+    const schema = SCHEMAS.meteogram(DISPLAY);
+    const field = findField(schema, "day_label_format");
+    expect(field?.default).toBe("weekday_month_day");
+    expect(field?.selector?.select?.options?.map((o) => o.value)).toEqual([
+      "weekday_month_day",
+      "weekday_abbrev",
+      "weekday_wide",
+      "month_day",
+    ]);
+  });
+
+  it("weather mode field offers full, forecast, and current options", () => {
+    const schema = SCHEMAS.weather(DISPLAY);
+    const field = findField(schema, "mode");
+    expect(field?.selector?.select?.options).toEqual([
+      { value: "full", label: "Full" },
+      { value: "forecast", label: "Forecast only" },
+      { value: "current", label: "Current only" },
+    ]);
+  });
+
+  it("graph tick count fields are clamped to 2-12 and default to 2", () => {
+    // Tick counts below 2 make no sense; 2 keeps min/max labels.
+    const schema = SCHEMAS.graph(DISPLAY);
+    for (const name of ["x_axis_ticks", "y_axis_ticks"]) {
+      const field = findField(schema, name);
+      expect(field?.default).toBe(2);
+      expect(field?.selector?.number).toMatchObject({ min: 2, max: 12 });
+    }
+  });
+
+  it("graph title field is a text field without a default", () => {
+    // An empty title falls back to the first series' name, so the
+    // editor must not seed a value that would override it.
+    const field = findField(SCHEMAS.graph(DISPLAY), "title");
+    expect(field?.selector).toHaveProperty("text");
+    expect(field?.default).toBeUndefined();
+    expect(LABELS).toHaveProperty("title");
+  });
+
+  it("graph axis options are labelled booleans defaulting to false", () => {
+    // Every axis toggle is off by default and has a label.
+    const schema = SCHEMAS.graph(DISPLAY);
+    for (const name of [
+      "x_axis_tick_marks",
+      "y_axis_tick_marks",
+      "x_axis_grid",
+      "y_axis_grid",
+      "y_axis_unit",
+    ]) {
+      const field = findField(schema, name);
+      expect(field?.default).toBe(false);
+      expect(field?.selector).toHaveProperty("boolean");
+      expect(LABELS).toHaveProperty(name);
+    }
+  });
 });
 
 // ── LABELS ───────────────────────────────────────────────────────
@@ -187,6 +304,12 @@ describe("LABELS", () => {
       expect(typeof LABELS[name]).toBe("string");
       expect((LABELS[name] as string).length).toBeGreaterThan(0);
     }
+  });
+
+  it("covers weather mode field name", () => {
+    expect(LABELS).toHaveProperty("mode");
+    expect(typeof LABELS.mode).toBe("string");
+    expect((LABELS.mode as string).length).toBeGreaterThan(0);
   });
 });
 
@@ -323,6 +446,16 @@ describe("getSummary", () => {
       getSummary({ type: "graph", entity_2: "sensor.humidity" })
     ).toBe("sensor.humidity");
   });
+
+  it("returns entity for meteogram widget", () => {
+    expect(
+      getSummary({ type: "meteogram", entity: "weather.home" })
+    ).toBe("weather.home");
+  });
+
+  it("returns '(no entity)' for meteogram widget with no entity", () => {
+    expect(getSummary({ type: "meteogram" })).toBe("(no entity)");
+  });
 });
 
 // ── SCHEMAS form grouping ────────────────────────────────────────
@@ -442,6 +575,77 @@ describe("SCHEMAS form grouping", () => {
     )!;
     const fields = flattenFields(appearance.schema!);
     expect(fields).toContain("font_size");
+  });
+
+  it("entity appearance section exposes nested font overrides", () => {
+    // The entity widget exposes per-role font size and weight
+    // overrides under a nested "fonts" section (value/name/unit).
+    // It must not flatten, so ha-form nests the values into a
+    // fonts object matching what resolve_font reads in Python.
+    const schema = SCHEMAS.entity(DISPLAY);
+    const appearance = getExpandableSections(schema).find(
+      (s) => s.name === "appearance"
+    )!;
+    const fonts = findField(appearance.schema!, "fonts");
+    expect(fonts).toBeDefined();
+    expect(fonts!.flatten).toBeFalsy();
+    const roles = getExpandableSections(fonts!.schema!);
+    expect(roles.map((r) => r.name)).toEqual(["value", "name", "unit"]);
+    for (const role of roles) {
+      const fields = flattenFields(role.schema!);
+      expect(fields).toContain("size");
+      expect(fields).toContain("weight");
+    }
+  });
+
+  it("every widget appearance section exposes its font roles", () => {
+    // Each widget exposes per-role font size and weight overrides
+    // under a nested "fonts" section. The role names are fixed by
+    // the Python renderer's resolve_font API.
+    const expected: [string, string[], boolean][] = [
+      ["entity", ["value", "name", "unit"], false],
+      ["tile", ["primary", "secondary"], false],
+      ["calendar", ["title", "primary", "secondary", "value"], false],
+      [
+        "entities",
+        ["title", "row_primary", "row_secondary", "value", "section"],
+        false,
+      ],
+      ["waste_schedule", ["title", "primary", "secondary", "value"], false],
+      ["heading", ["heading", "badge"], false],
+      ["device_battery", ["label"], false],
+      ["gauge", ["value", "unit", "name", "segment"], false],
+      ["meteogram", ["day", "hour", "grid", "precip"], false],
+      ["week_calendar", ["title", "day", "hour", "time", "event"], false],
+      // Weather's geometry is coupled to font_size, so it exposes
+      // weight-only overrides and omits the per-role size selector.
+      ["weather", ["temp", "detail", "precip"], true],
+      ["sensor", ["name", "value", "unit"], false],
+      ["graph", ["name", "value", "unit", "axis"], false],
+    ];
+    for (const [type, roles, weightOnly] of expected) {
+      const schema = SCHEMAS[type](DISPLAY);
+      const appearance = getExpandableSections(schema).find(
+        (s) => s.name === "appearance"
+      );
+      expect(appearance, `${type} has an appearance section`).toBeDefined();
+      const fonts = findField(appearance!.schema!, "fonts");
+      expect(fonts, `${type} has a fonts section`).toBeDefined();
+      expect(fonts!.flatten, `${type} fonts does not flatten`).toBeFalsy();
+      const roleFields = getExpandableSections(fonts!.schema!);
+      expect(roleFields.map((r) => r.name), `${type} font roles`).toEqual(
+        roles
+      );
+      for (const role of roleFields) {
+        const fields = flattenFields(role.schema!);
+        expect(fields, `${type}.${role.name} weight`).toContain("weight");
+        if (weightOnly) {
+          expect(fields, `${type}.${role.name} size`).not.toContain("size");
+        } else {
+          expect(fields, `${type}.${role.name} size`).toContain("size");
+        }
+      }
+    }
   });
 
   it("device_battery appearance section contains color", () => {
@@ -938,4 +1142,80 @@ describe("Invert condition panel", () => {
       expect(widget.visibility).toEqual([visibilityCondition]);
     },
   );
+});
+
+// ── Widget reorder event propagation ────────────────────────────
+
+describe("Widget reorder", () => {
+  it(
+    "stops propagation of item-moved so an ancestor sortable " +
+      "cannot misread it",
+    async () => {
+      // Regression test for issue #105: ha-sortable fires
+      // "item-moved" with bubbles/composed true, so without
+      // stopPropagation it escapes the editor's shadow DOM and
+      // reaches any ancestor ha-sortable (e.g. a Home Assistant
+      // Sections dashboard's own card-reorder list), which then
+      // misinterprets our widget indices as its own card indices
+      // and corrupts the dashboard config.
+      const editor = await mountEditor([
+        { type: "separator" },
+        { type: "separator" },
+      ]);
+
+      let escaped = false;
+      const onEscape = () => {
+        escaped = true;
+      };
+      document.addEventListener("item-moved", onEscape);
+
+      const sortable =
+        editor.shadowRoot!.querySelector("ha-sortable")!;
+      sortable.dispatchEvent(
+        new CustomEvent("item-moved", {
+          detail: { oldIndex: 0, newIndex: 1 },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+
+      document.removeEventListener("item-moved", onEscape);
+      expect(escaped).toBe(false);
+    },
+  );
+
+  it("still reorders the widget list itself", async () => {
+    // stopPropagation must not prevent the editor's own
+    // reorder logic from running.
+    const editor = await mountEditor([
+      { type: "heading", heading: "first" },
+      { type: "heading", heading: "second" },
+    ]);
+
+    let received: Widget[] | undefined;
+    editor.addEventListener(
+      "widget-change",
+      ((ev: CustomEvent<{ widgets: Widget[] }>) => {
+        received = ev.detail.widgets;
+      }) as EventListener,
+    );
+
+    const sortable =
+      editor.shadowRoot!.querySelector("ha-sortable")!;
+    sortable.dispatchEvent(
+      new CustomEvent("item-moved", {
+        detail: { oldIndex: 0, newIndex: 1 },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+
+    expect(received).toBeDefined();
+    expect(
+      (received![0] as Widget & { heading?: string }).heading,
+    ).toBe("second");
+    expect(
+      (received![1] as Widget & { heading?: string }).heading,
+    ).toBe("first");
+  });
 });

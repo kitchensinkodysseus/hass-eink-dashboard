@@ -18,32 +18,34 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import markupsafe
-
-from ..conditions import check_conditions
 from ..const import (
     COLOR_GRAY,
     DEFAULT_CARD_STYLE,
     DEFAULT_ROW_H,
     PADDING,
     DisplayConfig,
-    Widget,
+    FontWeight,
     color_to_hex,
 )
 from ._helpers import (
     _card_insets,
     _color_context,
-    _fmt,
+    _format_value_unit,
+    _icon_stroke_width,
     _metrics_context,
-    _resolve_icon_style,
-    _resolve_icon_svg,
+    _missing_entity_context,
+    _resolve_entity,
+    _resolve_entity_icon,
+    _resolve_invert,
     _widget_dim,
 )
 
+if TYPE_CHECKING:
+    from ..widget_config import EntityWidget
+
 
 def _build_entity_context(
-    widget: Widget,
+    widget: EntityWidget,
     config: DisplayConfig,
 ) -> dict[str, object]:
     """Build Jinja2 template context for the entity widget.
@@ -81,8 +83,17 @@ def _build_entity_context(
             ``unit`` (unit string override),
             ``icon_style`` (``"filled"`` / ``"outlined"`` /
             ``"none"``),
-            ``bold_value`` (render the state value in bold;
-            default ``False``),
+            ``fonts`` (per-role font overrides — a mapping of role
+            name to ``{"size": int, "weight": str}``; roles are
+            ``"value"``, ``"name"``, and ``"unit"``.  An omitted
+            ``size`` keeps the widget's derived size scaled by the
+            display-level ``font_scale``; an explicit ``size`` is
+            absolute.  An omitted ``weight`` keeps the role's
+            default: value ``"regular"``, name ``"medium"``, unit
+            ``"regular"``),
+            ``decimals`` (exact number of decimal places to show;
+            overrides HA's ``display_precision`` and device-class
+            defaults),
             ``name_position`` (``"top"`` / ``"bottom"``; default
             ``"bottom"`` — position of the name relative to the
             value+unit line),
@@ -99,41 +110,34 @@ def _build_entity_context(
 
     Returns:
         Template context dict consumed by ``entity.svg.j2``.
-        Returns ``{"w": …, "h": …, "has_entity": False,
-        **_color_context()}`` when the entity is missing.
+        Returns ``_missing_entity_context(w, h)`` when the
+        entity is missing.
         Full context includes widget dimensions, card style,
         metrics, colors, icon geometry, value/unit/name text and
         geometry, and the ``invert`` flag.
     """
-    from ..render import _compute_metrics, _load_font
+    from ..render import (
+        _compute_metrics,
+        _font_weight_svg,
+        _load_role_font,
+        resolve_font,
+    )
 
     x = widget.get("x", PADDING)
     svg_w = _widget_dim(widget, "w", config["width"] - x)
     svg_h = _widget_dim(widget, "h", 2 * DEFAULT_ROW_H)
-    entity_id: str = widget.get("entity", "")
-    name_override = widget.get("name")
-    icon_override = widget.get("icon")
     unit_override = widget.get("unit")
     attribute: str | None = widget.get("attribute")
     hide_icon: bool = widget.get("hide_icon", False)
     hide_name: bool = widget.get("hide_name", False)
-    icon_style = widget.get("icon_style")
     card_style = widget.get("card_style", DEFAULT_CARD_STYLE)
-    value_bold: bool = widget.get("bold_value", False)
     name_position = widget.get("name_position", "bottom")
     name_align = widget.get("name_align", "left")
-    states = config.get("states", {})
     display_levels = config.get("display_levels", 16)
 
-    state = states.get(entity_id) if entity_id else None
-    if state is None:
-        return {
-            "w": svg_w,
-            "h": svg_h,
-            "has_entity": False,
-            "invert": False,
-            **_color_context(),
-        }
+    entity = _resolve_entity(widget, config)
+    if entity is None:
+        return _missing_entity_context(svg_w, svg_h)
 
     colors = _color_context()
     m = _compute_metrics(svg_h)
@@ -146,70 +150,21 @@ def _build_entity_context(
     lpad = m.padding if x_off == 0 else 0
     rpad = m.padding if r_inset == 0 else 0
 
-    attrs = state.get("attributes", {})
-    domain = entity_id.split(".")[0]
-    state_val: str = state.get("state", "")
-
-    name_text: str = (
-        str(name_override)
-        if name_override is not None
-        else attrs.get("friendly_name", entity_id)
+    value_text, unit_text = _format_value_unit(
+        entity.state_val,
+        entity.attrs,
+        config,
+        entity.precision,
+        attribute,
+        unit_override,
     )
 
-    # Value: show attribute value when requested, else entity state.
-    if attribute is not None:
-        raw_val = attrs.get(attribute)
-        value_text = (
-            _fmt(str(raw_val), config)
-            if raw_val is not None and raw_val != ""
-            else "unknown"
-        )
-        auto_unit = ""
-    else:
-        value_text = _fmt(state_val, config)
-        auto_unit = attrs.get("unit_of_measurement", "")
-    unit_text: str = (
-        str(unit_override) if unit_override is not None else auto_unit
+    invert = _resolve_invert(widget, config.get("states", {}))
+    icon = _resolve_entity_icon(
+        widget, entity, m_icon.icon_inner, display_levels, invert=invert
     )
-
-    # Icon resolution: explicit override → device_class → attrs icon.
-    # Skipped entirely when hide_icon is set.
-    if hide_icon:
-        icon_svg: markupsafe.Markup | str = ""
-        letter = ""
-        icon_outline = False
-        icon_no_circle = True
-    else:
-        icon_svg, letter = _resolve_icon_svg(
-            icon_override,
-            attrs,
-            state_val,
-            domain,
-            m_icon.icon_inner,
-            entity_id,
-        )
-        icon_outline, icon_no_circle = _resolve_icon_style(
-            icon_style, state_val, display_levels
-        )
-    # Widened on 2-level displays to avoid dithering, matching the
-    # pattern other widgets use.
-    icon_stroke_w = m_icon.border * 3 if display_levels <= 2 else m_icon.border
+    icon_stroke_w = _icon_stroke_width(m_icon.border, display_levels)
     icon_fill = color_to_hex(COLOR_GRAY)
-
-    # Inverted "needs attention" signal: same condition format and
-    # evaluator as `visibility`, but drives a solid black card with
-    # white text/icon instead of hide/show.  `check_conditions([])`
-    # returns True, so the emptiness check is required — an absent
-    # or empty `invert_condition` must never invert the widget.  The
-    # icon is forced to the flat, no-circle style so the glyph draws
-    # cleanly on the black background.
-    invert_condition = widget.get("invert_condition")
-    invert = bool(invert_condition) and check_conditions(
-        invert_condition, states
-    )
-    if invert:
-        icon_no_circle = True
-        icon_outline = False
 
     # Icon: left-aligned, vertically centered against the full
     # widget height (not a header sub-band). Sized off m_icon (see
@@ -233,11 +188,32 @@ def _build_entity_context(
     # Font ratios are expressed against the same single-row-equivalent
     # height as the icon (see m_icon above) so the value reads as a
     # headline number sized comparably to the icon next to it, not a
-    # small caption dwarfed by it.
+    # small caption dwarfed by it.  Each role then passes through
+    # resolve_font so the widget's ``fonts`` overrides and the
+    # display-level ``font_scale`` can adjust size and weight.
     row_ref = svg_h // 2
-    value_font_sz = max(10, round(row_ref * 0.42))
-    unit_font_sz = max(10, round(row_ref * 0.22))
-    name_font_sz = max(10, round(row_ref * 0.20))
+    font_scale = config.get("font_scale", 1.0)
+    value_font_sz, value_weight = resolve_font(
+        widget,
+        "value",
+        max(10, round(row_ref * 0.42)),
+        FontWeight.REGULAR,
+        scale=font_scale,
+    )
+    unit_font_sz, unit_weight = resolve_font(
+        widget,
+        "unit",
+        max(10, round(row_ref * 0.22)),
+        FontWeight.REGULAR,
+        scale=font_scale,
+    )
+    name_font_sz, name_weight = resolve_font(
+        widget,
+        "name",
+        max(10, round(row_ref * 0.20)),
+        FontWeight.MEDIUM,
+        scale=font_scale,
+    )
 
     # Value and name are stacked tightly (small line gap, mirroring
     # card_row's primary/secondary spacing) and the whole two-line
@@ -259,9 +235,7 @@ def _build_entity_context(
     value_x = text_x0
     unit_x = value_x
     if unit_text:
-        value_font = _load_font(
-            value_font_sz, medium=not value_bold, bold=value_bold
-        )
+        value_font = _load_role_font(value_font_sz, value_weight)
         text_w = round(value_font.getlength(value_text))
         unit_gap = max(2, round(svg_h * 0.02))
         unit_x = value_x + text_w + unit_gap
@@ -284,33 +258,35 @@ def _build_entity_context(
         **_metrics_context(m),
         **colors,
         # Icon geometry.
-        "icon_svg": icon_svg,
+        "icon_svg": icon.svg,
         "icon_cx": icon_cx,
         "icon_cy": icon_cy,
         "icon_r": icon_r,
         "icon_stroke_w": icon_stroke_w,
         "icon_fill": icon_fill,
-        "icon_outline": icon_outline,
-        "icon_no_circle": icon_no_circle,
+        "icon_outline": icon.outline,
+        "icon_no_circle": icon.no_circle,
         "icon_glyph_x": icon_glyph_x,
         "icon_glyph_y": icon_glyph_y,
-        "letter": letter,
+        "letter": icon.letter,
         "letter_font_sz": m_icon.font_letter,
         # Value + unit.
         "value_text": value_text,
         "value_x": value_x,
         "value_y": value_y,
         "value_font_sz": value_font_sz,
-        "value_bold": value_bold,
+        "value_weight": _font_weight_svg(value_weight),
         "unit_text": unit_text,
         "unit_x": unit_x,
         "unit_y": unit_y,
         "unit_font_sz": unit_font_sz,
+        "unit_weight": _font_weight_svg(unit_weight),
         # Name.
         "hide_name": hide_name,
-        "name_text": name_text,
+        "name_text": entity.name,
         "name_x": name_x,
         "name_y": name_y,
         "name_font_sz": name_font_sz,
+        "name_weight": _font_weight_svg(name_weight),
         "name_anchor": name_anchor,
     }

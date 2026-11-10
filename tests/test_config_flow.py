@@ -484,6 +484,33 @@ class TestEinkDashboardConfigFlow:
         assert opts["optimize"] is False
         assert opts["webhook_urls"] == []
 
+    async def test_custom_resolution_stores_ppi(
+        self, hass: HomeAssistant
+    ) -> None:
+        # A custom display's pixel density is offered and saved.
+        flow = await _make_config_flow(hass)
+        await flow.async_step_user(_USER_INPUT_CUSTOM)
+        form = await flow.async_step_custom_resolution(None)
+        keys = {k.schema for k in form["data_schema"].schema}
+        assert "ppi" in keys
+        await flow.async_step_custom_resolution(
+            {"width": 800, "height": 480, "ppi": 124},
+        )
+        result = await flow.async_step_pull_only(None)
+
+        assert result["options"]["ppi"] == 124
+
+    async def test_custom_resolution_rejects_bad_ppi(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Out-of-range densities fail validation.
+        flow = await _make_config_flow(hass)
+        await flow.async_step_user(_USER_INPUT_CUSTOM)
+        with pytest.raises(vol.Invalid):
+            await flow.async_step_custom_resolution(
+                {"width": 800, "height": 480, "ppi": 5},
+            )
+
     async def test_custom_trmnl_webhook_creates_entry(
         self, hass: HomeAssistant
     ) -> None:
@@ -871,6 +898,59 @@ class TestEinkDashboardOptionsFlow:
         assert result["type"] is FlowResultType.CREATE_ENTRY
         assert result["data"]["use_system_fonts"] is True
 
+    async def test_display_settings_saves_font_family(
+        self, hass: HomeAssistant
+    ) -> None:
+        # The selected bundled family is persisted as an option.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(
+            {"update_interval": 60, "font_family": "Roboto"}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["font_family"] == "Roboto"
+
+    @pytest.mark.parametrize(
+        ("options", "expected"),
+        [
+            ({"device_model": "trmnl_og"}, "TRMNL"),
+            ({"device_model": "reterminal_e1001"}, "TRMNL"),
+            ({"device_model": "kindle_pw"}, "Roboto"),
+            ({"device_model": "trmnl_x"}, "Roboto"),
+            (
+                {"device_model": "custom", "width": 400, "height": 300},
+                "TRMNL",
+            ),
+            (
+                {"device_model": "custom", "width": 1200, "height": 825},
+                "Roboto",
+            ),
+            ({"width": 800, "height": 480}, "TRMNL"),
+            ({"device_model": "trmnl_og", "font_family": "Roboto"}, "Roboto"),
+            ({"device_model": "kindle_pw", "font_family": "bogus"}, "Roboto"),
+        ],
+    )
+    async def test_display_settings_default_font_family_follows_device(
+        self,
+        hass: HomeAssistant,
+        options: dict[str, Any],
+        expected: str,
+    ) -> None:
+        # Without a stored choice the form pre-selects the device's
+        # default font: TRMNL for low-resolution panels, Roboto for the
+        # rest.  A stored valid choice always wins.
+        flow = await _make_options_flow(
+            hass, {"update_interval": 60, **options}
+        )
+        result = await flow.async_step_display_settings(None)
+
+        markers = {
+            k.schema: k
+            for k in result["data_schema"].schema
+            if hasattr(k, "schema")
+        }
+        assert markers["font_family"].default() == expected
+
     async def test_display_settings_default_use_system_fonts_is_false(
         self, hass: HomeAssistant
     ) -> None:
@@ -885,6 +965,111 @@ class TestEinkDashboardOptionsFlow:
             if hasattr(k, "schema")
         }
         assert markers["use_system_fonts"].default() is False
+
+    async def test_display_settings_default_pixel_fonts_is_true(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Pixel-perfect text is on by default so the TRMNL pixel font
+        # renders crisply on 1-bit displays.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(None)
+
+        markers = {
+            k.schema: k
+            for k in result["data_schema"].schema
+            if hasattr(k, "schema")
+        }
+        assert markers["pixel_fonts"].default() is True
+
+    async def test_display_settings_saves_pixel_fonts_off(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Disabling pixel-perfect text persists it as a top-level option.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(
+            {"update_interval": 60, "pixel_fonts": False}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["pixel_fonts"] is False
+
+    async def test_display_settings_default_pixel_font_limit_is_auto(
+        self, hass: HomeAssistant
+    ) -> None:
+        # The large-text limit follows the pixel density by default.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(None)
+
+        markers = {
+            k.schema: k
+            for k in result["data_schema"].schema
+            if hasattr(k, "schema")
+        }
+        assert markers["pixel_font_limit"].default() == "auto"
+
+    async def test_display_settings_saves_pixel_font_limit(
+        self, hass: HomeAssistant
+    ) -> None:
+        # A fixed large-text limit persists as a top-level option.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(
+            {"update_interval": 60, "pixel_font_limit": "2"}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["pixel_font_limit"] == "2"
+
+    async def test_display_settings_default_black_text_is_false(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Gray text keeps its colour unless the user opts in.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(None)
+
+        markers = {
+            k.schema: k
+            for k in result["data_schema"].schema
+            if hasattr(k, "schema")
+        }
+        assert markers["black_text"].default() is False
+
+    async def test_display_settings_saves_black_text_on(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Enabling black text persists it as a top-level option.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(
+            {"update_interval": 60, "black_text": True}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["black_text"] is True
+
+    async def test_display_settings_default_black_dividers_is_false(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Dividers keep their gray colour unless the user opts in.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(None)
+
+        markers = {
+            k.schema: k
+            for k in result["data_schema"].schema
+            if hasattr(k, "schema")
+        }
+        assert markers["black_dividers"].default() is False
+
+    async def test_display_settings_saves_black_dividers_on(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Enabling black dividers persists it as a top-level option.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(
+            {"update_interval": 60, "black_dividers": True}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["black_dividers"] is True
 
     async def test_display_settings_use_system_fonts_before_font_dir(
         self, hass: HomeAssistant
@@ -1064,10 +1249,9 @@ class TestEinkDashboardOptionsFlow:
     async def test_display_settings_saves_optimize_toggle_on(
         self, hass: HomeAssistant
     ) -> None:
-        # Turning optimize on in the same submission where it was
-        # previously off must succeed even though the eink-only
-        # fields are absent from the schema built from the stale
-        # stored value (only font_dir was available to submit).
+        # Turning optimize on re-shows the form with the eink-only
+        # fields in an expanded Advanced section; the second
+        # submission (including those fields) is then saved.
         flow = await _make_options_flow(
             hass, {"update_interval": 60, "optimize": False}
         )
@@ -1079,11 +1263,76 @@ class TestEinkDashboardOptionsFlow:
             }
         )
 
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "display_settings"
+        top_level = {
+            k.schema: (k, v)
+            for k, v in result["data_schema"].schema.items()
+            if hasattr(k, "schema")
+        }
+        assert top_level["optimize"][0].default() is True
+        advanced = top_level["advanced_section"][1]
+        assert advanced.options["collapsed"] is False
+        section_fields = {
+            k.schema for k in advanced.schema.schema if hasattr(k, "schema")
+        }
+        assert {"dither_algorithm", "exposure", "saturation"} <= (
+            section_fields
+        )
+        assert (
+            "Advanced" in result["description_placeholders"]["optimize_note"]
+        )
+
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "optimize": True,
+                "display_levels": "2",
+                "advanced_section": {"dither_algorithm": "atkinson"},
+            }
+        )
+
         assert result["type"] is FlowResultType.CREATE_ENTRY
         assert result["data"]["optimize"] is True
-        assert "dither_algorithm" not in result["data"]
-        assert "exposure" not in result["data"]
-        assert "saturation" not in result["data"]
+        assert result["data"]["display_levels"] == 2
+        assert result["data"]["dither_algorithm"] == "atkinson"
+
+    async def test_display_settings_reshows_when_leaving_256_levels(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Switching away from 256 levels reveals exposure/saturation,
+        # so the form is shown again instead of saving.
+        flow = await _make_options_flow(
+            hass,
+            {"update_interval": 60, "optimize": True, "display_levels": 256},
+        )
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "optimize": True,
+                "display_levels": "2",
+            }
+        )
+
+        assert result["type"] is FlowResultType.FORM
+
+    async def test_display_settings_saves_when_no_new_fields(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Turning optimize off hides fields, so the form saves at once.
+        flow = await _make_options_flow(
+            hass, {"update_interval": 60, "optimize": True}
+        )
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "optimize": False,
+                "display_levels": "16",
+            }
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["optimize"] is False
 
     async def test_display_settings_preserves_advanced_when_optimize_off(
         self, hass: HomeAssistant
@@ -1238,6 +1487,52 @@ class TestEinkDashboardOptionsFlow:
         assert result["data"]["display_levels"] == 16
         assert result["data"]["dither_algorithm"] == "floyd_steinberg"
         assert result["data"]["webhook_urls"] == []
+
+    async def test_device_settings_model_change_resets_font_family(
+        self,
+        hass: HomeAssistant,
+    ) -> None:
+        # A font chosen for the old model is dropped so the new model's
+        # default font applies.
+        flow = await _make_options_flow(
+            hass,
+            {
+                "device_model": "kindle_pw",
+                "orientation": "portrait",
+                "width": 758,
+                "height": 1024,
+                "rotation": 0,
+                "font_family": "Roboto",
+            },
+        )
+        result = await flow.async_step_device_settings(
+            {"device_model": "reterminal_e1001", "orientation": "landscape"}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert "font_family" not in result["data"]
+
+    async def test_device_settings_same_model_keeps_font_family(
+        self,
+        hass: HomeAssistant,
+    ) -> None:
+        # Changing only the orientation keeps the user's font choice.
+        flow = await _make_options_flow(
+            hass,
+            {
+                "device_model": "kindle_pw",
+                "orientation": "portrait",
+                "width": 758,
+                "height": 1024,
+                "rotation": 0,
+                "font_family": "TRMNL",
+            },
+        )
+        result = await flow.async_step_device_settings(
+            {"device_model": "kindle_pw", "orientation": "landscape"}
+        )
+
+        assert result["data"]["font_family"] == "TRMNL"
 
     async def test_device_settings_orientation_change_recomputes(
         self,
@@ -1824,6 +2119,124 @@ class TestEinkDashboardOptionsFlow:
         assert result["data"]["rotation"] == 0
         assert result["data"]["optimize"] is True
         assert result["data"]["display_levels"] == 16
+
+    async def test_device_settings_custom_updates_ppi(
+        self, hass: HomeAssistant
+    ) -> None:
+        # A stored custom display edits its ppi inline in device
+        # settings; clearing the field removes it.
+        base = {
+            "device_model": "custom",
+            "orientation": "portrait",
+            "width": 800,
+            "height": 480,
+            "rotation": 0,
+            "ppi": 124,
+        }
+        flow = await _make_options_flow(hass, base)
+        form = await flow.async_step_device_settings(None)
+        ppi_key = next(
+            k for k in form["data_schema"].schema if k.schema == "ppi"
+        )
+        assert ppi_key.description == {"suggested_value": 124}
+        result = await flow.async_step_device_settings(
+            {"device_model": "custom", "orientation": "portrait", "ppi": 160}
+        )
+        assert result["data"]["ppi"] == 160
+
+        flow = await _make_options_flow(hass, base)
+        result = await flow.async_step_device_settings(
+            {"device_model": "custom", "orientation": "portrait"}
+        )
+        assert "ppi" not in result["data"]
+
+    async def test_device_settings_custom_updates_resolution(
+        self, hass: HomeAssistant
+    ) -> None:
+        # A stored custom display edits width and height inline,
+        # pre-filled with the current values, keeping its display
+        # settings.
+        flow = await _make_options_flow(
+            hass,
+            {
+                "device_model": "custom",
+                "orientation": "portrait",
+                "width": 600,
+                "height": 800,
+                "rotation": 0,
+                "display_levels": 2,
+            },
+        )
+        form = await flow.async_step_device_settings(None)
+        defaults = {
+            k.schema: k.default()
+            for k in form["data_schema"].schema
+            if k.schema in ("width", "height")
+        }
+        assert defaults == {"width": 600, "height": 800}
+        result = await flow.async_step_device_settings(
+            {
+                "device_model": "custom",
+                "orientation": "portrait",
+                "width": 800,
+                "height": 480,
+            }
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["width"] == 800
+        assert result["data"]["height"] == 480
+        assert result["data"]["display_levels"] == 2
+
+    async def test_device_settings_preset_hides_resolution(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Preset devices take width and height from the preset.
+        flow = await _make_options_flow(
+            hass, {"device_model": "kindle_pw", "orientation": "portrait"}
+        )
+        form = await flow.async_step_device_settings(None)
+        keys = {k.schema for k in form["data_schema"].schema}
+        assert not keys & {"width", "height"}
+
+    async def test_device_settings_preset_drops_ppi(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Presets bring their own density, so a custom ppi is removed
+        # and the device settings form does not offer the field.
+        flow = await _make_options_flow(
+            hass,
+            {
+                "device_model": "custom",
+                "orientation": "portrait",
+                "ppi": 124,
+            },
+        )
+        result = await flow.async_step_device_settings(
+            {"device_model": "kindle_pw", "orientation": "portrait"}
+        )
+        assert "ppi" not in result["data"]
+
+        flow = await _make_options_flow(
+            hass, {"device_model": "kindle_pw", "orientation": "portrait"}
+        )
+        form = await flow.async_step_device_settings(None)
+        assert "ppi" not in {k.schema for k in form["data_schema"].schema}
+
+    async def test_options_custom_resolution_saves_ppi(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Switching to a custom display stores the entered ppi.
+        flow = await _make_options_flow(
+            hass, {"device_model": "kindle_pw", "orientation": "portrait"}
+        )
+        await flow.async_step_device_settings(
+            {"device_model": "custom", "orientation": "portrait"}
+        )
+        result = await flow.async_step_custom_resolution(
+            {"width": 800, "height": 480, "ppi": 124}
+        )
+        assert result["data"]["ppi"] == 124
 
     async def test_device_settings_custom_stays_custom_skips_resolution(
         self,

@@ -34,7 +34,14 @@ image entity and a public HTTP endpoint.
 - `widgets/_helpers.py` — shared layout helpers for widget builders:
   `_color_context()`, `_widget_dim()`, `_card_insets()`, `_metrics_context()`,
   `_title_layout()`, `_auto_row_height()`, `_fmt()`, `_entity_info_context()`,
-  `_ACTIVE_STATES`
+  `_missing_entity_context()` (blank-canvas fallback for absent entities),
+  `ResolvedEntity` + `_resolve_entity()`, `EntityIcon` +
+  `_resolve_entity_icon()`, `_resolve_invert()` (entity lookup, icon
+  and `invert_condition` resolution shared by Entity, Tile, Gauge,
+  Entities and `_entity_info_context()`),
+  `CardRow` + `_row_context()` (per-row contract of the `card_row` macro
+  for list widgets), `_icon_stroke_width()` (icon outline width,
+  widened on 2-level displays), `_ACTIVE_STATES`
 - `image.py` — `EinkDashboardImage` (`ImageEntity`), scheduled refresh, ETag tracking
 - `http.py` — unauthenticated HTTP view at `/api/eink_dashboard/{entry_id}/image.png` with ETag/304 support
 - `store.py` — `EinkDashboardStore`, persists widget list via HA's `Store` (`eink_dashboard.{entry_id}`)
@@ -43,6 +50,10 @@ image entity and a public HTTP endpoint.
 - `push.py` — `async_push_image(session, url, image_bytes)`: HTTP POST of PNG bytes to a webhook URL
 - `sensor.py` — `EinkDashboardSensor`, exposes dashboard state as an HA sensor entity
 - `const.py` — enums, shared constants, and defaults
+- `widget_config.py` — static-only `TypedDict` per widget type (`TileWidget`,
+  ...) plus shared mixins (`WidgetBase`, `EntityFields`, ...) that helpers
+  accept; widgets stay plain JSON dicts at runtime. `ty` checks subscripts
+  (`widget["x"]`) but not `.get("x")` keys
 
 **MDI icons**: MDI icons are resolved at runtime by `_mdi_svg_filter()`
 in `svg_render.py` via a two-stage lookup:
@@ -65,19 +76,23 @@ through these sources without copying files manually.
   applies rotation and e-ink optimisation, and returns PNG bytes
 
 **Widget types** (`WidgetType` in `const.py`): `ENTITY`, `HEADING`,
-`SEPARATOR`, `TILE`, `WEATHER`, `DEVICE_BATTERY`, `WASTE_SCHEDULE`.
+`SEPARATOR`, `TILE`, `WEATHER`, `DEVICE_BATTERY`, `WASTE_SCHEDULE`,
+`WEEK_CALENDAR`.
 Deprecated types (hidden from the widget picker but kept for existing
 configs): `TEXT` (superseded by `HEADING`), `SENSOR_ROWS`,
 `STATUS_ICONS`.
 
 **Adding a widget type**:
 1. Add the new value to `WidgetType` in `const.py`
-2. Create `templates/foo.svg.j2` (may import `_macros.svg.j2` helpers)
-3. Write `_build_foo_context(widget, config) -> dict` in `widgets/foo.py`
-4. Re-export from `widgets/__init__.py` and register in
+2. Add a `FooWidget` TypedDict with `total=False` to `widget_config.py`
+   (tests enforce both)
+3. Create `templates/foo.svg.j2` (may import `_macros.svg.j2` helpers)
+4. Write `_build_foo_context(widget: FooWidget, config) -> dict` in
+   `widgets/foo.py`
+5. Re-export from `widgets/__init__.py` and register in
    `_SVG_RENDERERS` in `svg_render.py`
-5. Add the widget type to `frontend/src/types/ha.d.ts`
-6. Add the schema and entry to `WIDGET_TYPES` in `frontend/src/eink-dashboard-editor.ts`
+6. Add the widget type to `frontend/src/types/ha.d.ts`
+7. Add the schema and entry to `WIDGET_TYPES` in `frontend/src/eink-dashboard-editor.ts`
 
 **Converting or redesigning a widget type** (PIL→SVG migration or new
 widget):
@@ -134,6 +149,40 @@ the standard row height; use its fields (`icon_dia`, `icon_inner`,
 loads `fonts/Roboto/Roboto-Regular.ttf` (or `Roboto-Medium.ttf` when
 `medium=True`, or `Roboto-Bold.ttf` when `bold=True`; `bold` takes
 precedence over `medium`), falling back to PIL's built-in default.
+Templates must write sizes as `font-size="{{ sz | font_px }}"` and
+families as `font-family="{{ sz | font_family(font_family_name) }}"`
+with the *same* `sz`: with the `pixel_fonts` option (default on)
+`font_px` snaps TRMNL sizes to the font's pixel grid (12/16/21 px or
+multiples), and `font_family` picks the matching face. `_load_font`
+applies the same snapping so measurements match the rendered text.
+TRMNL text above `resolve_pixel_font_max_scale(entry.options)` × 21
+px (`pixel_font_limit` option; `"auto"` derives it from the display's
+ppi) falls back to anti-aliased Inter: the `font_family` filter lists
+Inter first, `font_px` skips snapping, and `_load_font` measures with
+Inter (see `large_text_fallback()` in `fonts.py`). Inter is not a
+user-selectable primary family (see `FontFamily` in `const.py`), only
+this internal fallback.
+Read the selected family with `resolve_font_family(entry.options)`
+from `const.py`: an unset option falls back to the device's default
+(`DevicePreset.font_family`, or TRMNL for custom displays whose
+shorter side is at most `LOW_RES_MAX_SHORT_SIDE` px, else Roboto).
+
+**Font customization**: every widget supports per-role font overrides
+via a `fonts` widget key — a mapping of role name to
+`{"size": int, "weight": str}` where weight is
+`"regular"`/`"medium"`/`"bold"` (`FontWeight` in `const.py`). Role names
+are widget-specific (e.g. entity uses `value`/`name`/`unit`). Resolve
+them with `resolve_font(widget, role, default_size, default_weight,
+scale=…)` in `render.py`; an explicit `size` is absolute, an omitted
+size is multiplied by the display-level `font_scale`. Always measure
+with `_load_role_font(size, weight)` so PIL's measured advance matches
+the rendered SVG face, and pass `_font_weight_svg(weight)` into the
+template's `font-weight`. The `card_row`/`widget_title` macros take SVG
+weight strings (`primary_weight`/`secondary_weight`/`value_weight`/
+`weight`), where `""` omits the attribute. The older `bold_value`
+boolean is gone: `store.py` migrates stored widget lists (storage
+version 1 → 2), rewriting `bold_value: true` into the equivalent
+`fonts.<role>.weight: "bold"`, so the renderers never read it.
 
 **Localization**: Weekday/month abbreviations (`_weekday_abbrev`,
 `_month_abbrev` in `render.py`) use `babel.dates.format_date` against

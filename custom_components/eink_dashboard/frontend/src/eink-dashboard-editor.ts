@@ -23,6 +23,7 @@ import type {
   Widget,
   CardStyle,
   IconStyle,
+  WeatherMode,
   DisplayConfig,
   WidgetTypeMeta,
   Condition,
@@ -41,6 +42,9 @@ const DEFAULT_CARD_STYLE: CardStyle = "none";
 
 /** Default icon circle style for tile-style widgets. */
 const DEFAULT_ICON_STYLE: IconStyle = "filled";
+
+/** Default weather display mode. Mirrors DEFAULT_WEATHER_MODE in const.py. */
+const DEFAULT_WEATHER_MODE: WeatherMode = "full";
 
 // ── Widget type registry ─────────────────────────────────────────
 
@@ -98,6 +102,7 @@ export const WIDGET_TYPES: Record<string, WidgetTypeMeta> = {
       forecast_days: 5,
       font_size: FONT_SIZE_WEATHER,
       card_style: DEFAULT_CARD_STYLE,
+      mode: DEFAULT_WEATHER_MODE,
     },
   },
   weather_wall: {
@@ -207,6 +212,22 @@ export const WIDGET_TYPES: Record<string, WidgetTypeMeta> = {
       card_style: DEFAULT_CARD_STYLE,
     },
   },
+  week_calendar: {
+    label: "Week calendar",
+    description: "Weekly grid of events from a calendar entity",
+    icon: "mdi:calendar-week",
+    defaults: {
+      type: "week_calendar",
+      x: 24,
+      y: 0,
+      // Fills the default 758 px display width; resize as needed.
+      w: 710,
+      h: 440,
+      entity: "",
+      start_hour: 8,
+      end_hour: 20,
+    },
+  },
   sensor: {
     label: "Sensor",
     description: "Single sensor with optional history sparkline graph",
@@ -246,6 +267,21 @@ export const WIDGET_TYPES: Record<string, WidgetTypeMeta> = {
       y: 0,
       w: 400,
       // 5 × DEFAULT_ROW_H gives adequate graph area below the header.
+      h: 280,
+      entity: "",
+      card_style: DEFAULT_CARD_STYLE,
+    },
+  },
+  meteogram: {
+    label: "Meteogram",
+    description: "Hourly temperature curve with forecast icons",
+    icon: "mdi:weather-cloudy",
+    defaults: {
+      type: "meteogram",
+      x: 24,
+      y: 0,
+      w: 400,
+      // 5 × DEFAULT_ROW_H (entire widget; no header row).
       h: 280,
       entity: "",
       card_style: DEFAULT_CARD_STYLE,
@@ -392,15 +428,89 @@ function cardStyleSelector(): HaFormSchema {
 }
 
 /**
- * Bold-value boolean toggle.
+ * Weather display mode dropdown selector.
  *
  * @returns A single ha-form schema entry.
  */
-function boldValueSelector(): HaFormSchema {
+function weatherModeSelector(): HaFormSchema {
   return {
-    name: "bold_value",
+    name: "mode",
+    default: DEFAULT_WEATHER_MODE,
+    selector: {
+      select: {
+        options: [
+          { value: "full", label: "Full" },
+          { value: "forecast", label: "Forecast only" },
+          { value: "current", label: "Current only" },
+        ],
+        mode: "dropdown",
+      },
+    },
+  };
+}
+
+/**
+ * Decimal-places number input.
+ *
+ * Overrides HA's `display_precision` and device-class defaults when
+ * set; left empty, the widget falls back to those.
+ *
+ * @returns A single ha-form schema entry.
+ */
+function decimalsSelector(): HaFormSchema {
+  return {
+    name: "decimals",
+    selector: {
+      number: { min: 0, max: 4, mode: "box" },
+    },
+  };
+}
+
+/**
+ * Maximum list row height in pixels.
+ *
+ * Rows never grow beyond this, and it sets the row size when the
+ * widget height is not fixed.  The placeholder shows the display's
+ * density-scaled default (56 px on a 212 ppi Kindle Paperwhite).
+ *
+ * @param d - Display config; `row_height` is the device default.
+ * @returns A single ha-form schema entry.
+ */
+function rowHeightSelector(d: DisplayConfig): HaFormSchema {
+  return {
+    name: "row_height",
+    default: d.row_height ?? 56,
+    selector: {
+      number: { min: 16, max: 400, mode: "box", unit_of_measurement: "px" },
+    },
+  };
+}
+
+/**
+ * Hide-icon boolean toggle for list widgets.
+ *
+ * @returns A single ha-form schema entry.
+ */
+function hideIconSelector(): HaFormSchema {
+  return {
+    name: "hide_icon",
     default: false,
     selector: { boolean: {} },
+  };
+}
+
+/**
+ * Pixel width of the dividers between list rows (default 1).
+ *
+ * @returns A single ha-form schema entry.
+ */
+function dividerWidthSelector(): HaFormSchema {
+  return {
+    name: "divider_width",
+    default: 1,
+    selector: {
+      number: { min: 0, max: 20, mode: "box", unit_of_measurement: "px" },
+    },
   };
 }
 
@@ -441,6 +551,76 @@ function nameAlignSelector(): HaFormSchema {
         ],
       },
     },
+  };
+}
+
+/**
+ * Font size number selector for a nested font role (8–72 px).
+ *
+ * @returns A single ha-form schema entry named `size`.
+ */
+function fontRoleSizeSelector(): HaFormSchema {
+  return {
+    name: "size",
+    selector: { number: { min: 8, max: 72, mode: "box" } },
+  };
+}
+
+/**
+ * Font weight dropdown selector for a nested font role.
+ *
+ * @returns A single ha-form schema entry named `weight`.
+ */
+function fontRoleWeightSelector(): HaFormSchema {
+  return {
+    name: "weight",
+    selector: {
+      select: {
+        options: [
+          { value: "regular", label: "Regular" },
+          { value: "medium", label: "Medium" },
+          { value: "bold", label: "Bold" },
+        ],
+        mode: "dropdown",
+      },
+    },
+  };
+}
+
+/**
+ * Nested "Fonts" section exposing per-role size and weight overrides.
+ *
+ * ha-form nests child values under the container `name` when
+ * `flatten` is unset, so this writes a `fonts` object keyed by role
+ * (`{ fonts: { value: { size, weight } } }`) — the shape
+ * `resolve_font` reads in the Python renderer.
+ *
+ * When `weightOnly` is set the per-role size selector is omitted and
+ * only weight overrides are exposed. The weather widget uses this
+ * because its text geometry is derived from `font_size`; a role size
+ * override there would be ignored by the renderer.
+ *
+ * @param roles - `[role, label]` pairs for the widget type.
+ * @param opts - `weightOnly` omits the size selector (weather only).
+ * @returns An expandable ha-form schema entry named `fonts`.
+ */
+function fontsSection(
+  roles: [string, string][],
+  opts: { weightOnly?: boolean } = {},
+): HaFormSchema {
+  return {
+    name: "fonts",
+    type: "expandable",
+    title: "Fonts",
+    icon: "mdi:format-font",
+    schema: roles.map(([role, label]) => ({
+      name: role,
+      type: "expandable",
+      title: label,
+      schema: opts.weightOnly
+        ? [fontRoleWeightSelector()]
+        : [fontRoleSizeSelector(), fontRoleWeightSelector()],
+    })),
   };
 }
 
@@ -734,6 +914,7 @@ export const SCHEMAS: Record<
           name: "humidity_entity",
           selector: { entity: { domain: "sensor" } },
         },
+        weatherModeSelector(),
       ],
     },
     {
@@ -750,7 +931,18 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [fontSizeSelector(FONT_SIZE_WEATHER), cardStyleSelector()],
+      schema: [
+        fontSizeSelector(FONT_SIZE_WEATHER),
+        cardStyleSelector(),
+        fontsSection(
+          [
+            ["temp", "Temperature"],
+            ["detail", "Detail"],
+            ["precip", "Precipitation"],
+          ],
+          { weightOnly: true }
+        ),
+      ],
     },
   ],
 
@@ -889,6 +1081,7 @@ export const SCHEMAS: Record<
           selector: { boolean: {} },
         },
         { name: "state_content", selector: { text: {} } },
+        decimalsSelector(),
       ],
     },
     {
@@ -907,7 +1100,14 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), iconStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        iconStyleSelector(),
+        fontsSection([
+          ["primary", "Primary"],
+          ["secondary", "Secondary"],
+        ]),
+      ],
     },
   ],
 
@@ -940,6 +1140,7 @@ export const SCHEMAS: Record<
         },
         { name: "attribute", selector: { text: {} } },
         { name: "unit", selector: { text: {} } },
+        decimalsSelector(),
       ],
     },
     {
@@ -959,9 +1160,13 @@ export const SCHEMAS: Record<
       schema: [
         cardStyleSelector(),
         iconStyleSelector(),
-        boldValueSelector(),
         namePositionSelector(),
         nameAlignSelector(),
+        fontsSection([
+          ["value", "Value"],
+          ["name", "Name"],
+          ["unit", "Unit"],
+        ]),
       ],
     },
   ],
@@ -981,6 +1186,7 @@ export const SCHEMAS: Record<
           name: "entities",
           selector: { entity: { multiple: true } },
         },
+        decimalsSelector(),
       ],
     },
     {
@@ -989,7 +1195,10 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Layout",
       icon: "mdi:move-resize",
-      schema: [{ type: "grid", name: "", schema: posXYWH(d) }],
+      schema: [
+        { type: "grid", name: "", schema: posXYWH(d) },
+        rowHeightSelector(d),
+      ],
     },
     {
       name: "appearance",
@@ -997,7 +1206,19 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), iconStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        iconStyleSelector(),
+        hideIconSelector(),
+        dividerWidthSelector(),
+        fontsSection([
+          ["title", "Title"],
+          ["row_primary", "Row primary"],
+          ["row_secondary", "Row secondary"],
+          ["value", "Value"],
+          ["section", "Section"],
+        ]),
+      ],
     },
   ],
 
@@ -1050,6 +1271,10 @@ export const SCHEMAS: Record<
         cardStyleSelector(),
         iconStyleSelector("none"),
         headingAlignSelector(),
+        fontsSection([
+          ["heading", "Heading"],
+          ["badge", "Badge"],
+        ]),
       ],
     },
   ],
@@ -1094,7 +1319,11 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [colorSelector(), cardStyleSelector(), boldValueSelector()],
+      schema: [
+        colorSelector(),
+        cardStyleSelector(),
+        fontsSection([["label", "Label"]]),
+      ],
     },
   ],
 
@@ -1125,6 +1354,7 @@ export const SCHEMAS: Record<
           selector: { boolean: {} },
         },
         { name: "unit", selector: { text: {} } },
+        decimalsSelector(),
         {
           name: "graph",
           selector: {
@@ -1203,7 +1433,15 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), iconStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        iconStyleSelector(),
+        fontsSection([
+          ["name", "Name"],
+          ["value", "Value"],
+          ["unit", "Unit"],
+        ]),
+      ],
     },
   ],
 
@@ -1251,6 +1489,7 @@ export const SCHEMAS: Record<
       icon: "mdi:move-resize",
       schema: [
         { type: "grid", name: "", schema: posXYWH(d) },
+        rowHeightSelector(d),
       ],
     },
     {
@@ -1259,7 +1498,74 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        hideIconSelector(),
+        dividerWidthSelector(),
+        fontsSection([
+          ["title", "Title"],
+          ["primary", "Primary"],
+          ["secondary", "Secondary"],
+          ["value", "Value"],
+        ]),
+      ],
+    },
+  ],
+  week_calendar: (d) => [
+    identitySection(),
+    {
+      name: "content",
+      type: "expandable",
+      flatten: true,
+      expanded: true,
+      title: "Content",
+      icon: "mdi:calendar-week",
+      schema: [
+        {
+          name: "entity",
+          required: true,
+          selector: { entity: { domain: "calendar", multiple: true } },
+        },
+        { name: "title", selector: { text: {} } },
+        {
+          name: "start_hour",
+          default: 8,
+          selector: {
+            number: { min: 0, max: 23, mode: "box" },
+          },
+        },
+        {
+          name: "end_hour",
+          default: 20,
+          selector: {
+            number: { min: 1, max: 24, mode: "box" },
+          },
+        },
+      ],
+    },
+    {
+      name: "layout_pos",
+      type: "expandable",
+      flatten: true,
+      title: "Layout",
+      icon: "mdi:move-resize",
+      schema: [{ type: "grid", name: "", schema: posXYWH(d) }],
+    },
+    {
+      name: "appearance",
+      type: "expandable",
+      flatten: true,
+      title: "Appearance",
+      icon: "mdi:palette",
+      schema: [
+        fontsSection([
+          ["title", "Title"],
+          ["day", "Day"],
+          ["hour", "Hour"],
+          ["time", "Time"],
+          ["event", "Event"],
+        ]),
+      ],
     },
   ],
   calendar: (d) => [
@@ -1300,7 +1606,10 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Layout",
       icon: "mdi:move-resize",
-      schema: [{ type: "grid", name: "", schema: posXYWH(d) }],
+      schema: [
+        { type: "grid", name: "", schema: posXYWH(d) },
+        rowHeightSelector(d),
+      ],
     },
     {
       name: "appearance",
@@ -1308,7 +1617,17 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        hideIconSelector(),
+        dividerWidthSelector(),
+        fontsSection([
+          ["title", "Title"],
+          ["primary", "Primary"],
+          ["secondary", "Secondary"],
+          ["value", "Value"],
+        ]),
+      ],
     },
   ],
   gauge: (d) => [
@@ -1351,12 +1670,7 @@ export const SCHEMAS: Record<
           default: true,
           selector: { boolean: {} },
         },
-        {
-          name: "decimals",
-          selector: {
-            number: { min: 0, max: 4, mode: "box" },
-          },
-        },
+        decimalsSelector(),
         {
           name: "gauge_type",
           default: "standard",
@@ -1404,7 +1718,15 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        fontsSection([
+          ["value", "Value"],
+          ["unit", "Unit"],
+          ["name", "Name"],
+          ["segment", "Segment"],
+        ]),
+      ],
     },
   ],
   graph: (d) => [
@@ -1436,8 +1758,10 @@ export const SCHEMAS: Record<
           selector: { entity: {} },
         },
         { name: "name", selector: { text: {} } },
+        { name: "title", selector: { text: {} } },
         { name: "icon", selector: { icon: {} } },
         { name: "unit", selector: { text: {} } },
+        decimalsSelector(),
         {
           name: "data_source",
           default: "history",
@@ -1682,6 +2006,56 @@ export const SCHEMAS: Record<
       ],
     },
     {
+      name: "axes",
+      type: "expandable",
+      flatten: true,
+      title: "Axes",
+      icon: "mdi:axis-arrow",
+      schema: [
+        {
+          type: "grid",
+          name: "",
+          schema: [
+            {
+              name: "x_axis_ticks",
+              default: 2,
+              selector: { number: { min: 2, max: 12, mode: "box" } },
+            },
+            {
+              name: "y_axis_ticks",
+              default: 2,
+              selector: { number: { min: 2, max: 12, mode: "box" } },
+            },
+            {
+              name: "x_axis_tick_marks",
+              default: false,
+              selector: { boolean: {} },
+            },
+            {
+              name: "y_axis_tick_marks",
+              default: false,
+              selector: { boolean: {} },
+            },
+            {
+              name: "x_axis_grid",
+              default: false,
+              selector: { boolean: {} },
+            },
+            {
+              name: "y_axis_grid",
+              default: false,
+              selector: { boolean: {} },
+            },
+          ],
+        },
+        {
+          name: "y_axis_unit",
+          default: false,
+          selector: { boolean: {} },
+        },
+      ],
+    },
+    {
       name: "layout",
       type: "expandable",
       flatten: true,
@@ -1695,15 +2069,135 @@ export const SCHEMAS: Record<
       flatten: true,
       title: "Appearance",
       icon: "mdi:palette",
-      schema: [cardStyleSelector(), boldValueSelector()],
+      schema: [
+        cardStyleSelector(),
+        fontsSection([
+          ["name", "Name"],
+          ["value", "Value"],
+          ["unit", "Unit"],
+          ["axis", "Axis"],
+        ]),
+      ],
+    },
+  ],
+  meteogram: (d) => [
+    identitySection(),
+    {
+      name: "content",
+      type: "expandable",
+      flatten: true,
+      expanded: true,
+      title: "Content",
+      icon: "mdi:weather-cloudy",
+      schema: [
+        {
+          name: "entity",
+          required: true,
+          selector: { entity: { domain: "weather" } },
+        },
+        {
+          name: "hours",
+          default: 24,
+          selector: { number: { min: 8, max: 120, mode: "box" } },
+        },
+        {
+          name: "show_cloud_cover",
+          default: true,
+          selector: { boolean: {} },
+        },
+        {
+          name: "show_precipitation",
+          default: true,
+          selector: { boolean: {} },
+        },
+        {
+          name: "day_label_format",
+          default: "weekday_month_day",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "weekday_month_day", label: "Sun Oct 18" },
+                { value: "weekday_abbrev", label: "Sun" },
+                { value: "weekday_wide", label: "Sunday" },
+                { value: "month_day", label: "Oct 18" },
+              ],
+            },
+          },
+        },
+      ],
+    },
+    {
+      name: "layout",
+      type: "expandable",
+      flatten: true,
+      title: "Layout",
+      icon: "mdi:move-resize",
+      schema: [{ type: "grid", name: "", schema: posXYWH(d) }],
+    },
+    {
+      name: "appearance",
+      type: "expandable",
+      flatten: true,
+      title: "Appearance",
+      icon: "mdi:palette",
+      schema: [
+        {
+          name: "line_width",
+          selector: {
+            number: { min: 1, max: 10, mode: "box" },
+          },
+        },
+        {
+          name: "smoothing",
+          default: true,
+          selector: { boolean: {} },
+        },
+        {
+          name: "show_fill",
+          default: false,
+          selector: { boolean: {} },
+        },
+        cardStyleSelector(),
+        fontsSection([
+          ["day", "Day"],
+          ["hour", "Hour"],
+          ["grid", "Grid"],
+          ["precip", "Precipitation"],
+        ]),
+      ],
     },
   ],
 };
 
 export const HELPERS: Record<string, string> = {
+  row_height:
+    "Rows never grow taller than this; extra widget height stays "
+    + "empty below the list.  Leave empty to use the display's "
+    + "default, scaled to its pixel density.",
+  divider_width:
+    "Width of the lines between rows (default 1 px). "
+    + "0 hides them.",
   show_all:
     "When off, the widget is empty if no collection falls "
     + "within the next 3 days.",
+  x_axis_ticks:
+    "Maximum number of time labels. 2 shows only the oldest and "
+    + "newest time; more adds labels at round times (fewer are "
+    + "shown when they would overlap).",
+  y_axis_ticks:
+    "Maximum number of value labels. 2 shows only min and max; "
+    + "more adds labels at round values.",
+  x_axis_tick_marks: "Short marks below the graph at each time label.",
+  y_axis_tick_marks: "Short marks beside the graph at each value label.",
+  x_axis_grid:
+    "Vertical lines across the graph at each time label "
+    + "(dotted on black-and-white displays).",
+  y_axis_grid:
+    "Horizontal lines across the graph at each value label "
+    + "(dotted on black-and-white displays).",
+  y_axis_unit:
+    "Append the unit (or the Unit override) to the value labels.",
 };
 
 export const LABELS: Record<string, string> = {
@@ -1724,6 +2218,8 @@ export const LABELS: Record<string, string> = {
   border_radius: "Corner radius",
   direction: "Direction", style: "Style", length: "Length",
   font_size: "Font size",
+  size: "Size",
+  weight: "Weight",
   color: "Color",
   attribute: "Attribute",
   unit: "Unit",
@@ -1733,13 +2229,15 @@ export const LABELS: Record<string, string> = {
   badges: "Badges",
   card_style: "Card style",
   icon_style: "Icon style",
-  bold_value: "Bold value",
+  divider_width: "Divider width",
+  row_height: "Max row height",
   layout: "Layout",
   show_all: "Show all upcoming dates",
   entries: "Entries",
   forecast_days: "Forecast days",
   temperature_entity: "Temperature sensor",
   humidity_entity: "Humidity sensor",
+  mode: "Mode",
   graph: "Graph type",
   data_source: "Data source",
   attribute_timestamp_key: "Timestamp key",
@@ -1752,6 +2250,8 @@ export const LABELS: Record<string, string> = {
   hide_fill: "Hide fill",
   max_events: "Max events",
   days_ahead: "Days ahead",
+  start_hour: "First hour",
+  end_hour: "Last hour",
   min: "Minimum",
   max: "Maximum",
   gauge_type: "Gauge type",
@@ -1775,8 +2275,16 @@ export const LABELS: Record<string, string> = {
   show_icon: "Show icon",
   show_legend: "Show legend",
   smoothing: "Smoothing",
+  day_label_format: "Date format",
   show_labels: "Show labels",
   show_extrema: "Show extrema",
+  x_axis_ticks: "Time labels",
+  y_axis_ticks: "Value labels",
+  x_axis_tick_marks: "Time tick marks",
+  y_axis_tick_marks: "Value tick marks",
+  x_axis_grid: "Vertical grid lines",
+  y_axis_grid: "Horizontal grid lines",
+  y_axis_unit: "Show unit on value axis",
   group_by: "Group by",
   min_bound_range: "Min bound range",
   color_thresholds_transition: "Threshold transition",
@@ -1798,6 +2306,9 @@ export const LABELS: Record<string, string> = {
   entity_3: "Third entity",
   name_3: "Third entity name",
   y_axis_3: "Third entity Y axis",
+  hours: "Hours to show",
+  show_cloud_cover: "Show cloud cover",
+  show_precipitation: "Show precipitation",
   moon_entity: "Moon phase sensor",
   uv_hide_below: "Hide UV below",
   uv_warn_above: "Warn on UV above",
@@ -1848,9 +2359,11 @@ export function getSummary(widget: Widget): string {
   if (
     t === "weather" || t === "weather_wall" || t === "tile"
     || t === "entity" || t === "sensor" || t === "calendar"
-    || t === "gauge"
+    || t === "gauge" || t === "meteogram" || t === "week_calendar"
   ) {
-    return widget.entity || "(no entity)";
+    const entity = widget.entity;
+    const label = Array.isArray(entity) ? entity.join(", ") : entity;
+    return label || "(no entity)";
   }
   if (t === "graph") {
     const primary = widget.entity || "";
@@ -2917,14 +3430,20 @@ class EinkDashboardEditor extends HTMLElement {
   /**
    * Handle a drag-reorder event from ha-sortable.
    *
-   * Clears keyboard sort mode (pointer drag takes over),
-   * then delegates to _moveWidget.
+   * Stops propagation first: ha-sortable fires "item-moved"
+   * with bubbles/composed true, so left unchecked it crosses
+   * our shadow boundaries and reaches any ancestor ha-sortable
+   * (e.g. a Sections dashboard's own card-reorder list), which
+   * misreads our widget indices as its own card indices.
+   * Then clears keyboard sort mode (pointer drag takes over)
+   * and delegates to _moveWidget.
    *
    * @param ev - Custom event with oldIndex and newIndex.
    */
   private _onItemMoved(
     ev: CustomEvent<{ oldIndex: number; newIndex: number }>,
   ): void {
+    ev.stopPropagation();
     const { oldIndex, newIndex } = ev.detail;
     if (oldIndex === newIndex) return;
     this._sortSelectedIndex = undefined;

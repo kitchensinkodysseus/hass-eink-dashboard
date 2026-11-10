@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import io
+from itertools import pairwise
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -297,6 +298,157 @@ class TestDitherAlgorithmSelection:
         assert mock.call_args[1]["mode"] is DitherMode.FLOYD_STEINBERG
 
 
+class TestNoneAlgorithm:
+    def test_none_selects_direct_map(self) -> None:
+        # "none" passes DitherMode.NONE to the dithering library.
+        from epaper_dithering import DitherMode
+
+        mock = MagicMock(return_value=_gradient().convert("P"))
+        with patch(
+            "custom_components.eink_dashboard.optimize.dither_image",
+            mock,
+        ):
+            optimize_for_eink(
+                _gradient(),
+                {
+                    "optimize": True,
+                    "display_levels": 4,
+                    "dither_algorithm": "none",
+                },
+            )
+        mock.assert_called_once()
+        assert mock.call_args[1]["mode"] is DitherMode.NONE
+
+    def test_none_maps_to_nearest_level_without_pattern(self) -> None:
+        # Without error diffusion each row of a horizontal gradient
+        # changes level only at the band edges: three transitions
+        # between the four gray levels, never a dot pattern.
+        result = optimize_for_eink(
+            _gradient(height=4),
+            {
+                "optimize": True,
+                "display_levels": 4,
+                "dither_algorithm": "none",
+            },
+        )
+        for y in range(4):
+            row = [result.getpixel((x, y)) for x in range(256)]
+            changes = sum(a != b for a, b in pairwise(row))
+            assert changes == 3
+            assert row == sorted(row)
+
+    def test_none_drops_light_gray_on_black_and_white(self) -> None:
+        # Unlike "threshold", nearest-color mapping turns light gray
+        # white and only dark gray black on a 2-level display.
+        # The pure black and white pixels keep autocontrast a no-op.
+        img = Image.new("L", (4, 1))
+        for x, v in enumerate((0, 40, 180, 255)):
+            img.putpixel((x, 0), v)
+        result = optimize_for_eink(
+            img,
+            {
+                "optimize": True,
+                "display_levels": 2,
+                "dither_algorithm": "none",
+            },
+        )
+        assert result.mode == "1"
+        values = [result.convert("L").getpixel((x, 0)) for x in range(4)]
+        assert values == [0, 0, 255, 255]
+
+    def test_none_supported_on_color_scheme(self) -> None:
+        # "none" works on color displays too (no fallback).
+        from epaper_dithering import DitherMode
+
+        img = Image.new("RGB", (8, 8), (200, 50, 50))
+        mock = MagicMock(return_value=img.convert("P"))
+        with patch(
+            "custom_components.eink_dashboard.optimize.dither_image",
+            mock,
+        ):
+            optimize_for_eink(
+                img,
+                {
+                    "optimize": True,
+                    "color_scheme": "bwr",
+                    "dither_algorithm": "none",
+                },
+            )
+        mock.assert_called_once()
+        assert mock.call_args[1]["mode"] is DitherMode.NONE
+
+
+class TestThresholdAlgorithm:
+    def test_non_white_pixels_become_black(self) -> None:
+        # threshold maps every pixel except pure white to black.
+        img = Image.new("L", (6, 1), 255)
+        for x, v in enumerate((0, 120, 180, 230, 254)):
+            img.putpixel((x, 0), v)
+        result = optimize_for_eink(
+            img,
+            {
+                "optimize": True,
+                "display_levels": 2,
+                "dither_algorithm": "threshold",
+            },
+        )
+        assert result.mode == "1"
+        values = [result.convert("L").getpixel((x, 0)) for x in range(6)]
+        assert values == [0, 0, 0, 0, 0, 255]
+
+    def test_threshold_skips_dither_image(self) -> None:
+        # threshold must not invoke the error-diffusion library at all.
+        mock = MagicMock()
+        with patch(
+            "custom_components.eink_dashboard.optimize.dither_image",
+            mock,
+        ):
+            result = optimize_for_eink(
+                _gradient(),
+                {
+                    "optimize": True,
+                    "display_levels": 16,
+                    "dither_algorithm": "threshold",
+                },
+            )
+        mock.assert_not_called()
+        assert result.mode == "1"
+
+    def test_threshold_ignored_at_256_levels(self) -> None:
+        # 256 levels is passthrough, so threshold leaves grays intact.
+        result = optimize_for_eink(
+            _gradient(),
+            {
+                "optimize": True,
+                "display_levels": 256,
+                "dither_algorithm": "threshold",
+            },
+        )
+        assert result.mode == "L"
+        assert len(result.getcolors(256) or []) > 2
+
+    def test_threshold_falls_back_on_color_scheme(self) -> None:
+        # Color displays fall back to Floyd-Steinberg dithering.
+        from epaper_dithering import DitherMode
+
+        img = Image.new("RGB", (8, 8), (200, 50, 50))
+        mock = MagicMock(return_value=img.convert("P"))
+        with patch(
+            "custom_components.eink_dashboard.optimize.dither_image",
+            mock,
+        ):
+            optimize_for_eink(
+                img,
+                {
+                    "optimize": True,
+                    "color_scheme": "bwr",
+                    "dither_algorithm": "threshold",
+                },
+            )
+        mock.assert_called_once()
+        assert mock.call_args[1]["mode"] is DitherMode.FLOYD_STEINBERG
+
+
 class TestColorSchemeDithering:
     def test_color_scheme_produces_rgb_output(self) -> None:
         # BWR dithering should return an RGB image, not grayscale.
@@ -387,7 +539,14 @@ class TestOptimizeIntegration:
             render_dashboard,
         )
 
-        config = {"width": 200, "height": 100, "optimize": False}
+        # Pixel fonts render text without anti-aliasing, so disable
+        # them to get the anti-aliased gray edges this test counts.
+        config = {
+            "width": 200,
+            "height": 100,
+            "optimize": False,
+            "pixel_fonts": False,
+        }
         widgets = [{"type": "heading", "x": 10, "y": 10, "heading": "Hi"}]
         png = render_dashboard(widgets, config)
         img = Image.open(io.BytesIO(png))

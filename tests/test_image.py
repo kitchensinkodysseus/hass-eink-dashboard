@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,7 @@ from custom_components.eink_dashboard.const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
+from custom_components.eink_dashboard.data import EinkDashboardRuntimeData
 from custom_components.eink_dashboard.image import (
     PUSH_MAX_IMAGE_BYTES,
     EinkDashboardImage,
@@ -87,8 +89,8 @@ def make_entity(
     """Build an EinkDashboardImage backed by a registered config entry.
 
     Returns a factory that creates a MockConfigEntry (registered via
-    add_to_hass), seeds hass.data[DOMAIN][entry.entry_id], and
-    constructs an EinkDashboardImage with async_write_ha_state mocked.
+    add_to_hass), seeds entry.runtime_data, and constructs an
+    EinkDashboardImage with async_write_ha_state mocked.
     """
 
     def _make(
@@ -96,7 +98,9 @@ def make_entity(
     ) -> tuple[EinkDashboardImage, MockConfigEntry]:
         entry = _make_entry(options)
         entry.add_to_hass(hass)
-        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
+        entry.runtime_data = EinkDashboardRuntimeData(
+            store=MagicMock(), widgets=[]
+        )
         entity = EinkDashboardImage(hass, entry)
         entity.async_write_ha_state = MagicMock()
         return entity, entry
@@ -372,6 +376,255 @@ class TestEinkDashboardImage:
 
         assert "forecast" not in states["weather.home"]["attributes"]
 
+    async def test_fetch_calendar_events_sorted_by_start(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # CalDAV returns recurring occurrences before single events,
+        # so the service response is not chronological.  Events must
+        # be sorted by start before the widget truncates them.
+        backend_order = [
+            {
+                "start": "2026-10-08T19:00:00+02:00",
+                "end": "2026-10-08T19:45:00+02:00",
+                "summary": "Recurring",
+            },
+            {
+                "start": "2026-10-06T16:00:00+02:00",
+                "end": "2026-10-06T18:00:00+02:00",
+                "summary": "Tomorrow",
+            },
+            {
+                "start": "2026-10-08",
+                "end": "2026-10-09",
+                "summary": "All day",
+            },
+            {
+                "start": "2026-10-08T16:00:00+02:00",
+                "end": "2026-10-08T18:00:00+02:00",
+                "summary": "Afternoon",
+            },
+        ]
+        entity, _entry = make_entity()
+        entity.set_widgets([{"type": "calendar", "entity": "calendar.home"}])
+
+        states = {"calendar.home": {"state": "off", "attributes": {}}}
+        with patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            AsyncMock(
+                return_value={"calendar.home": {"events": backend_order}},
+            ),
+        ):
+            await entity._async_fetch_calendar_events(states)
+
+        summaries = [
+            e["summary"]
+            for e in states["calendar.home"]["attributes"]["events"]
+        ]
+        assert summaries == ["Tomorrow", "All day", "Afternoon", "Recurring"]
+
+    async def test_fetch_calendar_events_handles_service_error(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        entity, _entry = make_entity()
+        entity.set_widgets([{"type": "calendar", "entity": "calendar.home"}])
+
+        states = {"calendar.home": {"state": "off", "attributes": {}}}
+        with patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            AsyncMock(side_effect=Exception("service unavailable")),
+        ):
+            await entity._async_fetch_calendar_events(states)
+
+        assert "events" not in states["calendar.home"]["attributes"]
+
+    async def test_fetch_forecasts_skips_entity_lists(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # A week calendar widget stores its entity as a list, which
+        # must not crash the forecast scan with an unhashable type.
+        entity, _entry = make_entity()
+        entity.set_widgets(
+            [
+                {
+                    "type": "week_calendar",
+                    "entity": ["calendar.home", "calendar.work"],
+                }
+            ]
+        )
+
+        states = {"calendar.home": {"state": "off", "attributes": {}}}
+        await entity._async_fetch_forecasts(states)
+
+        assert "forecast" not in states["calendar.home"]["attributes"]
+
+    async def test_fetch_week_calendar_events(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # A week calendar widget stores sorted events under
+        # "week_events", leaving the upcoming-events "events" key to
+        # regular calendar widgets, and requests a window spanning
+        # every possible week start (six days back, seven ahead).
+        backend_order = [
+            {
+                "start": "2026-10-21T10:00:00+02:00",
+                "end": "2026-10-21T11:00:00+02:00",
+                "summary": "Later",
+            },
+            {
+                "start": "2026-10-19T10:00:00+02:00",
+                "end": "2026-10-19T11:00:00+02:00",
+                "summary": "Earlier",
+            },
+        ]
+        entity, _entry = make_entity()
+        entity.set_widgets(
+            [{"type": "week_calendar", "entity": "calendar.home"}]
+        )
+
+        states = {"calendar.home": {"state": "off", "attributes": {}}}
+        mock_call = AsyncMock(
+            return_value={"calendar.home": {"events": backend_order}},
+        )
+        with patch("homeassistant.core.ServiceRegistry.async_call", mock_call):
+            await entity._async_fetch_week_calendar_events(states)
+
+        attrs = states["calendar.home"]["attributes"]
+        assert [e["summary"] for e in attrs["week_events"]] == [
+            "Earlier",
+            "Later",
+        ]
+        assert "events" not in attrs
+        data = mock_call.call_args.args[2]
+        start = dt.datetime.fromisoformat(data["start_date_time"])
+        end = dt.datetime.fromisoformat(data["end_date_time"])
+        # Compare local dates: across a DST change the aware
+        # difference is 13 days plus or minus an hour.
+        assert end.date() - start.date() == dt.timedelta(days=13)
+        assert start.time() == dt.time.min
+        assert end.time() == dt.time.min
+
+    async def test_fetch_hourly_forecasts_for_meteogram(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # A METEOGRAM widget triggers an hourly (not daily) forecast
+        # fetch, stored under a separate "forecast_hourly" key.
+        forecast_data = [
+            {"datetime": "2025-05-04T10:00:00", "temperature": 18},
+        ]
+        entity, _entry = make_entity()
+        entity.set_widgets([{"type": "meteogram", "entity": "weather.home"}])
+
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {"temperature": 20},
+            }
+        }
+        with patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            AsyncMock(
+                return_value={
+                    "weather.home": {"forecast": forecast_data},
+                }
+            ),
+        ) as mock_call:
+            await entity._async_fetch_forecasts(states)
+
+        assert (
+            states["weather.home"]["attributes"]["forecast_hourly"]
+            == forecast_data
+        )
+        assert "forecast" not in states["weather.home"]["attributes"]
+        mock_call.assert_called_once_with(
+            "weather",
+            "get_forecasts",
+            {"entity_id": "weather.home", "type": "hourly"},
+            blocking=True,
+            return_response=True,
+        )
+
+    async def test_fetch_forecasts_daily_and_hourly_for_same_entity(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # WEATHER and METEOGRAM widgets on the same entity fetch both
+        # daily and hourly forecasts without clobbering each other.
+        daily_data = [{"datetime": "2025-05-04", "temperature": 18}]
+        hourly_data = [
+            {"datetime": "2025-05-04T10:00:00", "temperature": 17},
+        ]
+        entity, _entry = make_entity()
+        entity.set_widgets(
+            [
+                {"type": "weather", "entity": "weather.home"},
+                {"type": "meteogram", "entity": "weather.home"},
+            ]
+        )
+
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {"temperature": 20},
+            }
+        }
+
+        def _get_forecasts(
+            _domain: str, _service: str, data: dict[str, Any], **_kwargs: Any
+        ) -> dict[str, Any]:
+            forecast = daily_data if data["type"] == "daily" else hourly_data
+            return {"weather.home": {"forecast": forecast}}
+
+        with patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            AsyncMock(side_effect=_get_forecasts),
+        ) as mock_call:
+            await entity._async_fetch_forecasts(states)
+
+        assert states["weather.home"]["attributes"]["forecast"] == (daily_data)
+        assert states["weather.home"]["attributes"]["forecast_hourly"] == (
+            hourly_data
+        )
+        assert mock_call.call_count == 2
+
+    async def test_fetch_hourly_forecasts_skips_missing_entity(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # A METEOGRAM widget referencing an entity absent from states
+        # never triggers a service call.
+        entity, _entry = make_entity()
+        entity.set_widgets(
+            [{"type": "meteogram", "entity": "weather.missing"}]
+        )
+
+        states: dict[str, Any] = {}
+        with patch(
+            "homeassistant.core.ServiceRegistry.async_call", AsyncMock()
+        ) as mock_call:
+            await entity._async_fetch_forecasts(states)
+
+        mock_call.assert_not_called()
+
+    async def test_fetch_hourly_forecasts_handles_service_error(
+        self, make_entity: Callable[..., Any]
+    ) -> None:
+        # A failing hourly service call is swallowed; no crash and no
+        # forecast_hourly key is added.
+        entity, _entry = make_entity()
+        entity.set_widgets([{"type": "meteogram", "entity": "weather.home"}])
+
+        states = {
+            "weather.home": {
+                "state": "sunny",
+                "attributes": {"temperature": 20},
+            }
+        }
+        with patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            AsyncMock(side_effect=Exception("service unavailable")),
+        ):
+            await entity._async_fetch_forecasts(states)
+
+        assert "forecast_hourly" not in states["weather.home"]["attributes"]
+
     async def test_custom_update_interval(
         self, make_entity: Callable[..., Any]
     ) -> None:
@@ -568,13 +821,32 @@ class TestEinkDashboardImage:
             assert config["date_format"] == "dmy"
             assert config["time_format"] == "24"
 
+    async def test_time_zone_forwarded_to_render(
+        self, hass: HomeAssistant, make_entity: Callable[..., Any]
+    ) -> None:
+        # HA's configured time zone is passed to render_dashboard so
+        # graph time labels show local time.
+        from custom_components.eink_dashboard.render import render_dashboard
+
+        hass.config.time_zone = "Europe/Berlin"
+        entity, _entry = make_entity({"width": 200, "height": 100})
+        with patch(
+            "custom_components.eink_dashboard.image.render_dashboard",
+            wraps=render_dashboard,
+        ) as mock_render:
+            await entity._async_refresh(None)
+            config = mock_render.call_args[0][1]
+            assert config["time_zone"] == "Europe/Berlin"
+
 
 class TestImagePlatformSetup:
     async def test_async_setup_entry(self, hass: HomeAssistant) -> None:
         entry = _make_entry()
         entry.add_to_hass(hass)
         widgets = [{"type": "separator", "y": 50}]
-        hass.data[DOMAIN] = {entry.entry_id: {"widgets": widgets}}
+        entry.runtime_data = EinkDashboardRuntimeData(
+            store=MagicMock(), widgets=widgets
+        )
 
         async_add_entities = MagicMock()
         await async_setup_entry(hass, entry, async_add_entities)
@@ -583,7 +855,7 @@ class TestImagePlatformSetup:
         entities = async_add_entities.call_args[0][0]
         assert len(entities) == 1
         assert isinstance(entities[0], EinkDashboardImage)
-        assert hass.data[DOMAIN][entry.entry_id]["entity"] is entities[0]
+        assert entry.runtime_data.entity is entities[0]
         assert entities[0]._widgets == widgets
 
 
