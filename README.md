@@ -1,6 +1,6 @@
 ## About this fork
 
-This is a personal fork of [hass-eink-dashboard]((https://github.com/cryptomilk/hass-eink-dashboard)) by
+This is a personal fork of [hass-eink-dashboard](https://github.com/cryptomilk/hass-eink-dashboard) by
 Andreas Schneider, an excellent Home Assistant integration for
 rendering dashboards to e-ink displays. All credit for the
 integration itself, its rendering pipeline, colour dithering and
