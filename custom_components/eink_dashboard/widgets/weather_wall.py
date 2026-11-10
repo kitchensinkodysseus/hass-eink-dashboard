@@ -99,6 +99,28 @@ FONT_S = 20  # everything else
 MINUS_SCALE = 0.7
 MINUS_DX = 0.10  # as a fraction of the font size
 
+# The degree sign's advance, in ems, per typeface.  Column figures
+# are centred with text-anchor="middle", which centres the whole
+# string; the eye centres on the digits, so the figure is shifted
+# right by half the degree sign to hang it outside the measure.
+# Values are set by eye rather than measured: raise one if that
+# face's figures still sit left of their column, lower it if they
+# drift right.
+_DEGREE_EM = {
+    "Roboto": 0.36,
+    "Drogowskaz": 0.42,
+}
+_DEGREE_EM_DEFAULT = 0.38
+# The same treatment for the per cent sign under each day, so the
+# digits of the percentage share a centre line with the digits of
+# the temperature above.  Wider than the degree in every face, so
+# it has its own table.
+_PERCENT_EM = {
+    "Roboto": 0.76,
+    "Drogowskaz": 0.70,
+}
+_PERCENT_EM_DEFAULT = 0.72
+
 # Left block: the headline.
 LEFT_X = MARGIN
 LEFT_RIGHT = 320
@@ -728,6 +750,12 @@ def _build_weather_wall_context(
         "design_w": DESIGN_W,
         "design_h": DESIGN_H,
         "font": font,
+        "deg_shift_m": round(
+            FONT_M * _DEGREE_EM.get(font, _DEGREE_EM_DEFAULT) / 2, 1
+        ),
+        "pct_shift_s": round(
+            FONT_S * _PERCENT_EM.get(font, _PERCENT_EM_DEFAULT) / 2, 1
+        ),
         "state": state,
         "is_night": state == "night",
         "night_w": NIGHT_W,

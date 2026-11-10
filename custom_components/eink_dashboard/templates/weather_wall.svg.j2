@@ -417,7 +417,7 @@
    scale({{ hour_scale }})"><use href="#{{ hr.icon }}"/></g>
 {%- endif -%}
 {%- if hr.temp.show -%}
-<text x="{{ hr.cx }}" y="{{ y_hour_temp }}" font-size="{{ font_m }}"
+<text x="{{ hr.cx + (0 if hr.temp.neg else deg_shift_m) }}" y="{{ y_hour_temp }}" font-size="{{ font_m }}"
       font-weight="500" text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ font }}, Roboto"
   >{%- if hr.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ hr.temp.text }}</tspan>{% else %}{{ hr.temp.text }}{% endif -%}</text>
@@ -448,13 +448,13 @@
    scale({{ day_scale }})"><use href="#{{ d.icon }}"/></g>
 {%- endif -%}
 {%- if d.temp.show -%}
-<text x="{{ d.cx }}" y="{{ y_day_temp }}" font-size="{{ font_m }}"
+<text x="{{ d.cx + (0 if d.temp.neg else deg_shift_m) }}" y="{{ y_day_temp }}" font-size="{{ font_m }}"
       font-weight="500" text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ font }}, Roboto"
   >{%- if d.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ d.temp.text }}</tspan>{% else %}{{ d.temp.text }}{% endif -%}</text>
 {%- endif -%}
 {%- if d.prob -%}
-<text x="{{ d.cx }}" y="{{ y_day_prob }}" font-size="{{ font_s }}"
+<text x="{{ d.cx + pct_shift_s }}" y="{{ y_day_prob }}" font-size="{{ font_s }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ font }}, Roboto">{{ d.prob }}</text>
 {%- endif -%}
