@@ -704,6 +704,12 @@ def _build_weather_wall_context(
 
     now = hass_dt.now()
 
+    # The typeface, chosen per widget.  Roboto is the fallback in the
+    # template's font stack, so a missing file or a glyph the chosen
+    # face lacks, such as the true minus, quietly falls back rather
+    # than rendering nothing.
+    font = str(widget.get("font_family") or "Roboto")
+
     # Provisional layout, decided on the clock alone.  This has to
     # happen before `base` is built, because `base` carries it into
     # the template and into the early returns below.  It is refined
@@ -721,6 +727,7 @@ def _build_weather_wall_context(
         "h": svg_h,
         "design_w": DESIGN_W,
         "design_h": DESIGN_H,
+        "font": font,
         "state": state,
         "is_night": state == "night",
         "night_w": NIGHT_W,

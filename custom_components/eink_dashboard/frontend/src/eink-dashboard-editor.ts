@@ -791,6 +791,20 @@ export const SCHEMAS: Record<
       title: "Behaviour",
       icon: "mdi:clock-outline",
       schema: [
+                {
+          name: "font_family",
+          default: "Roboto",
+          selector: {
+            select: {
+              mode: "dropdown",
+              custom_value: true,
+              options: [
+                { value: "Roboto", label: "Roboto" },
+                { value: "Drogowskaz", label: "Drogowskaz" },
+              ],
+            },
+          },
+        },
         {
           name: "uv_hide_below",
           default: 4,
@@ -1771,6 +1785,7 @@ export const LABELS: Record<string, string> = {
   uv_hide_below: "Hide UV below",
   uv_warn_above: "Warn on UV above",
   force_state: "Force layout (preview)",
+  font_family: "Typeface",
 };
 
 // ── HA component loader ──────────────────────────────────────────
