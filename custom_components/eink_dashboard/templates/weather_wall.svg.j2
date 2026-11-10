@@ -359,14 +359,14 @@
       stroke="{{ c_warn_stroke }}" stroke-width="2"/>
 <text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_uv_label }}"
       font-size="{{ font_s }}" font-weight="500" text-anchor="middle"
-      fill="{{ c_warn_fg }}" font-family="{{ font }}, Roboto">UV</text>
+      fill="{{ c_warn_fg }}" font-family="{{ font }}, Roboto">{{ s_uv }}</text>
 <text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_headline }}"
       font-size="{{ font_l }}" font-weight="500" text-anchor="middle"
       fill="{{ c_warn_fg }}" font-family="{{ font }}, Roboto">{{ uv_text }}</text>
 {%- else -%}
 <text x="{{ left_right }}" y="{{ y_uv_label }}" font-size="{{ font_s }}"
       font-weight="500" text-anchor="end" fill="{{ c_fg }}"
-      font-family="{{ font }}, Roboto">UV</text>
+      font-family="{{ font }}, Roboto">{{ s_uv }}</text>
 <text x="{{ left_right }}" y="{{ y_headline }}" font-size="{{ font_l }}"
       font-weight="500" text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ font }}, Roboto">{{ uv_text }}</text>

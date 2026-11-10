@@ -190,6 +190,79 @@ def _palette(widget: dict, config: dict) -> dict[str, str]:
         chosen = str(config.get("color_scheme") or _PALETTE_GREY)
     return dict(_PALETTES.get(chosen, _PALETTES[_PALETTE_GREY]))
 
+# Curated panel vocabulary, in the manner of render.py's
+# _RELATIVE_DAY_PHRASES.  The same rule applies: only languages
+# where each phrase is an invariant substitution.  None of these
+# phrases makes a word agree with a number, so languages with
+# complex plural or case rules, Polish among them, are safe here.
+# Anything missing falls back to English key by key, so a partial
+# entry can never leave a blank on the panel.  Dates and weekday
+# names are not here: they come from Babel.
+_WALL_PHRASES: dict[str, dict[str, Any]] = {
+    "en": {
+        "tomorrow": "Tomorrow",
+        "overnight": "{t} overnight",
+        "max": "max {t}",
+        "min": "min {t}",
+        "mild": "mild {t}",
+        "cold": "cold {t}",
+        "gust": "gust {v}",
+        "uv": "UV",
+        "uv_value": "UV {v}",
+        "chance": {
+            "rain": "Chance of rain",
+            "snow": "Chance of snow",
+            "sleet": "Chance of sleet",
+        },
+        "warnings": {
+            "icy": "Icy",
+            "severe_frost": "Severe frost",
+            "frost": "Frost",
+            "ground_frost": "Ground frost",
+        },
+    },
+    "pl": {
+        "tomorrow": "Jutro",
+        "overnight": "{t} w nocy",
+        "max": "maks. {t}",
+        "min": "min. {t}",
+        "mild": "ciepło {t}",
+        "cold": "zimno {t}",
+        "gust": "porywy {v}",
+        "chance": {
+            "rain": "Szansa na deszcz",
+            "snow": "Szansa na śnieg",
+            "sleet": "Szansa na deszcz ze śniegiem",
+        },
+        "warnings": {
+            "icy": "Gołoledź",
+            "severe_frost": "Silny mróz",
+            "frost": "Mróz",
+            "ground_frost": "Przymrozek",
+        },
+    },
+}
+
+
+def _phrases(language: str) -> dict[str, Any]:
+    """Return the panel vocabulary for a language, English as base.
+
+    Args:
+        language: BCP 47 language code.  Only the primary subtag is
+            used, as in _relative_day_phrases().
+    """
+    lang = language.split("-")[0].lower()
+    merged: dict[str, Any] = {
+        k: dict(v) if isinstance(v, dict) else v
+        for k, v in _WALL_PHRASES["en"].items()
+    }
+    for key, value in _WALL_PHRASES.get(lang, {}).items():
+        if isinstance(value, dict):
+            merged[key] = {**merged.get(key, {}), **value}
+        else:
+            merged[key] = value
+    return merged
+
 # Left block: the headline.
 LEFT_X = MARGIN
 LEFT_RIGHT = 320
@@ -569,22 +642,18 @@ def _frost_warning(
     overnight: list[dict[str, Any]],
     preceding: list[dict[str, Any]],
 ) -> str:
-    """Derive a short frost or ice warning, or an empty string.
+    """Derive a frost or ice warning key, or an empty string.
 
-    Home Assistant's Met Office integration exposes no warnings, and
-    a National Severe Weather Warning would be the wrong instrument
-    anyway: it is issued regionally at an impact threshold, whereas
-    what a kitchen panel should answer is whether the car will need
-    scraping.
-
-    Args:
-        overnight: Hourly entries covering tonight.
-        preceding: Hourly entries for the six hours before, used to
-            decide whether there is any water about to freeze.
+    Returns a key into the phrase table rather than text, so the
+    wording follows the panel's language.  The Met Office
+    integration exposes no warnings, and a National Severe Weather
+    Warning would be the wrong instrument anyway: it is issued
+    regionally at an impact threshold, whereas a kitchen panel
+    should answer whether the car will need scraping.
 
     Returns:
-        One of ``"Icy"``, ``"Severe frost"``, ``"Frost"``,
-        ``"Ground frost"`` or ``""``.
+        One of ``"icy"``, ``"severe_frost"``, ``"frost"``,
+        ``"ground_frost"`` or ``""``.
     """
     temps = [
         t for e in overnight
@@ -599,11 +668,11 @@ def _frost_warning(
     ) >= ICE_PRECIP_MM
 
     if low <= FROST_AIR and wet:
-        return "Icy"
+        return "icy"
     if low <= FROST_SEVERE:
-        return "Severe frost"
+        return "severe_frost"
     if low <= FROST_AIR:
-        return "Frost"
+        return "frost"
 
     if low <= FROST_GROUND:
         clouds = [
@@ -617,87 +686,63 @@ def _frost_warning(
         clear = not clouds or min(clouds) < FROST_GROUND_CLOUD
         calm = not winds or max(winds) < FROST_GROUND_WIND
         if clear and calm:
-            return "Ground frost"
+            return "ground_frost"
     return ""
 
-
-def _remarkable(day: dict[str, Any], when: Any) -> str:
+def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
     """Return a short note when one measure is unusual, else "".
 
     Each candidate is compared against a percentile for the calendar
-    date, computed from thirty years of reanalysis over a fifteen-day
-    window.  An earlier version compared each day against the spread
-    of the days on screen, which measured "unusual for this week"
-    rather than "unusual for September" and rested on a sample of
-    five.
-
-    Whichever measure exceeds its threshold by the largest relative
-    margin wins, which keeps three quantities in different units
-    roughly comparable.
-
-    Args:
-        day: A daily forecast entry.
-        when: The local datetime of that day, or None.
-
-    Returns:
-        A short phrase, or an empty string when nothing stands out.
+    date from the climatology table.  Whichever measure exceeds its
+    threshold by the largest relative margin wins.  Failing that, a
+    cold night is noted anyway, since four degrees is ordinary in
+    January and still means scraping the car.
     """
-    if when is None or not _CLIMATOLOGY:
-        return ""
-    bands = _CLIMATOLOGY.get(f"{when.month:02d}-{when.day:02d}")
-    if not bands:
-        return ""
-
+    low = _num(day.get("templow"))
     candidates: list[tuple[float, str]] = []
 
-    def over(measure: str, value: float | None, floor: float):
-        """Relative margin above the upper percentile, or None."""
-        limit = bands.get(measure, {}).get(REMARK_HIGH)
-        if value is None or limit is None or value < floor:
-            return None
-        if limit <= 0 or value <= limit:
-            return None
-        return (value - limit) / limit
+    bands = None
+    if when is not None and _CLIMATOLOGY:
+        bands = _CLIMATOLOGY.get(f"{when.month:02d}-{when.day:02d}")
 
-    uv = _num(day.get("uv_index"))
-    margin = over("uv", uv, REMARK_UV_MIN)
-    if margin is not None:
-        candidates.append((margin, f"UV {round(uv)}"))
+    if bands:
+        def over(measure: str, value: float | None, floor: float):
+            """Relative margin above the upper percentile, or None."""
+            limit = bands.get(measure, {}).get(REMARK_HIGH)
+            if value is None or limit is None or value < floor:
+                return None
+            if limit <= 0 or value <= limit:
+                return None
+            return (value - limit) / limit
 
-    gust = _num(day.get("wind_gust_speed"))
-    margin = over("gust", gust, REMARK_GUST_MIN)
-    if margin is not None:
-        candidates.append((margin, f"gust {round(gust)}"))
+        uv = _num(day.get("uv_index"))
+        margin = over("uv", uv, REMARK_UV_MIN)
+        if margin is not None:
+            candidates.append((margin, s["uv_value"].format(v=round(uv))))
 
-    # Overnight minimum, two-tailed: a mild night in February and a
-    # cold one in July are both worth saying.  Measured against the
-    # width of the band rather than against the value itself, since
-    # a minimum near zero would otherwise give an enormous margin.
-    low = _num(day.get("templow"))
-    band = bands.get("tmin", {})
-    cold = band.get(REMARK_LOW)
-    warm = band.get(REMARK_HIGH)
-    if low is not None and cold is not None and warm is not None:
-        width = max(1.0, warm - cold)
-        if low < cold:
-            candidates.append(
-                ((cold - low) / width, f"min {_signed(_temp(low))}")
-            )
-        elif low > warm:
-            candidates.append(
-                ((low - warm) / width, f"min {_signed(_temp(low))}")
-            )
+        gust = _num(day.get("wind_gust_speed"))
+        margin = over("gust", gust, REMARK_GUST_MIN)
+        if margin is not None:
+            candidates.append((margin, s["gust"].format(v=round(gust))))
+
+        # Two-tailed, measured against the width of the band rather
+        # than the value, since a minimum near zero would otherwise
+        # give an enormous margin.
+        band = bands.get("tmin", {})
+        cold = band.get(REMARK_LOW)
+        warm = band.get(REMARK_HIGH)
+        if low is not None and cold is not None and warm is not None:
+            width = max(1.0, warm - cold)
+            t = _signed(_temp(low))
+            if low < cold:
+                candidates.append(((cold - low) / width, s["cold"].format(t=t)))
+            elif low > warm:
+                candidates.append(((low - warm) / width, s["mild"].format(t=t)))
 
     if candidates:
         return max(candidates, key=lambda c: c[0])[1]
-
-    # Nothing is unusual for the time of year, but a cold night is
-    # worth saying whether or not it is unusual.  Deliberately
-    # outranked by everything above: a gale or a hard frost is the
-    # better thing to print, and this is only the default when the
-    # day is otherwise unremarkable.
     if low is not None and low <= COLD_NOTE_AT:
-        return f"min {_signed(_temp(low))}"
+        return s["min"].format(t=_signed(_temp(low)))
     return ""
 
 def _rain_path(entries: list[dict[str, Any]]) -> tuple[str, float]:
@@ -801,6 +846,14 @@ def _build_weather_wall_context(
     # than rendering nothing.
     font = str(widget.get("font_family") or "Roboto")
 
+    # Dates and weekday names come from Babel through the
+    # integration's own helpers, so they match its other widgets;
+    # the remaining vocabulary comes from _WALL_PHRASES.
+    from ..render import _babel_format_date, _weekday_abbrev
+
+    lang = str(config.get("language") or "en")
+    s = _phrases(lang)
+
     # Provisional layout, decided on the clock alone.  This has to
     # happen before `base` is built, because `base` carries it into
     # the template and into the early returns below.  It is refined
@@ -819,6 +872,7 @@ def _build_weather_wall_context(
         "design_w": DESIGN_W,
         "design_h": DESIGN_H,
         "font": font,
+        "s_uv": s["uv"],
         **_palette(widget, config),
         "deg_shift_m": round(
             FONT_M * _DEGREE_EM.get(font, _DEGREE_EM_DEFAULT) / 2, 1
@@ -946,7 +1000,7 @@ def _build_weather_wall_context(
         low = _temp(today.get("templow"))
         if low["show"]:
             line2_kind = "plain"
-            line2_text = f"{_signed(low)} overnight"
+            line2_text = s["overnight"].format(t=_signed(low))
     elif sunset_ahead and sunset and sunrise:
         line2_kind = "solar"
         line2_text = (
@@ -963,7 +1017,7 @@ def _build_weather_wall_context(
         warn = _frost_warning(overnight, preceding)
         if warn:
             line2_kind = "warn"
-            line2_text = warn
+            line2_text = s["warnings"].get(warn, warn)
 
     # ---- the bottom metrics line -----------------------------
     gust = _num(today.get("wind_gust_speed"))
@@ -1045,7 +1099,7 @@ def _build_weather_wall_context(
             "temp": _temp(e.get("temperature")),
         })
     rain_d, rain_mid = _rain_path(hours_raw)
-    caption = f"Chance of {_precip_word(hours_raw)}"
+    caption = s["chance"][_precip_word(hours_raw)]
     # The daily figure for whichever day the strip covers, not the
     # peak across its hours: a maximum overstates, since fifteen per
     # cent for one hour is not fifteen per cent all day.
@@ -1128,24 +1182,24 @@ def _build_weather_wall_context(
             # The day strip always describes daytime, whatever the
             # hour the panel is rendered at, so never the night icon.
             "icon": _icon_name(e, False),
-            "label": when.strftime("%a") if when else "",
+            "label": _weekday_abbrev(when.date(), lang) if when else "",
             "temp": _temp(e.get("temperature")),
             "prob": (
                 f"{round(prob)}%"
                 if prob is not None and prob >= PROB_MIN
                 else ""
             ),
-            "remark": _remarkable(e, when),
+            "remark": _remarkable(e, when, s),
         })
 
     if state != "morning":
         hi = _temp(tomorrow.get("temperature"))
-        base["header_max"] = f"max {_signed(hi)}" if hi["show"] else ""
+        base["header_max"] = s["max"].format(t=_signed(hi)) if hi["show"] else ""
 
     return {
         **base,
         "has_state": True,
-        "date_text": now.strftime("%A %-d %B"),
+        "date_text": _babel_format_date(now.date(), "EEEE d MMMM", lang),
         "hero_icon": hero_icon,
         "moon_phase": moon_phase,
         "moon_scale": moon_scale,
@@ -1159,7 +1213,7 @@ def _build_weather_wall_context(
         "uv_show": uv_show,
         "uv_warn": uv_warn,
         "uv_text": f"{round(uv)}" if uv is not None else "",
-        "header_left": "" if state == "morning" else "Tomorrow",
+        "header_left": "" if state == "morning" else s["tomorrow"],
         "header_uv": "",
         "hours": hours,
         "rain_d": rain_d,
