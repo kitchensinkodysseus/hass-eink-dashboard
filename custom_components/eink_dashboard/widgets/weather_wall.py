@@ -103,9 +103,13 @@ MINUS_DX = 0.10  # as a fraction of the font size
 # are centred with text-anchor="middle", which centres the whole
 # string; the eye centres on the digits, so the figure is shifted
 # right by half the degree sign to hang it outside the measure.
-# Values are set by eye rather than measured: raise one if that
-# face's figures still sit left of their column, lower it if they
-# drift right.
+#
+# The integration's own families (Roboto, TRMNL, Inter) are measured
+# from their font files, so they need no entry here.  These tables
+# serve only a per-widget font_family override, whose face the
+# integration cannot measure.  Values are set by eye: raise one if
+# that face's figures still sit left of their column, lower it if
+# they drift right.
 _DEGREE_EM = {
     "Roboto": 0.36,
     "Drogowskaz": 0.42,
@@ -810,6 +814,62 @@ def _pick_hours(
     return out
 
 
+def _font_context(override: str) -> dict[str, object]:
+    """Return the template's font stacks, sizes and figure offsets.
+
+    Must be called inside the render context that
+    ``render_widget_svg()`` sets up, because the dashboard's font
+    family and pixel-font settings are read from it.
+
+    Args:
+        override: The widget's ``font_family``, or an empty string
+            to follow the dashboard.
+
+    Returns:
+        ``ff_*`` font-family stacks and ``font_*`` sizes for the four
+        sizes of the type scale, the reduced minus sign's size and
+        gap, the half-widths that centre column figures on their
+        digits, and ``font_override`` for the template.
+    """
+    design = {"xl": FONT_XL, "l": FONT_L, "m": FONT_M, "s": FONT_S}
+
+    if override:
+        sizes: dict[str, int | float] = dict(design)
+        stacks = dict.fromkeys(design, f"{override}, Roboto")
+        deg_shift = round(
+            FONT_M * _DEGREE_EM.get(override, _DEGREE_EM_DEFAULT) / 2, 1
+        )
+        pct_shift = round(
+            FONT_S * _PERCENT_EM.get(override, _PERCENT_EM_DEFAULT) / 2, 1
+        )
+    else:
+        from ..fonts import current_font_family, font_family, pixel_font_size
+        from ..render import _load_font
+
+        family = current_font_family()
+        sizes = {k: pixel_font_size(v) for k, v in design.items()}
+        stacks = {k: font_family(v, family) for k, v in design.items()}
+        # Column temperatures are weight 500, the percentages 400.
+        deg_shift = round(
+            _load_font(FONT_M, medium=True).getlength("\u00b0") / 2, 1
+        )
+        pct_shift = round(_load_font(FONT_S).getlength("%") / 2, 1)
+
+    ctx: dict[str, object] = {
+        "font_override": bool(override),
+        "deg_shift_m": deg_shift,
+        "pct_shift_s": pct_shift,
+        "minus_xl": round(sizes["xl"] * MINUS_SCALE),
+        "minus_m": round(sizes["m"] * MINUS_SCALE),
+        "dx_xl": round(sizes["xl"] * MINUS_DX),
+        "dx_m": round(sizes["m"] * MINUS_DX),
+    }
+    for key in design:
+        ctx[f"font_{key}"] = sizes[key]
+        ctx[f"ff_{key}"] = stacks[key]
+    return ctx
+
+
 def _build_weather_wall_context(
     widget: dict,
     config: dict,
@@ -840,11 +900,19 @@ def _build_weather_wall_context(
 
     now = hass_dt.now()
 
-    # The typeface, chosen per widget.  Roboto is the fallback in the
-    # template's font stack, so a missing file or a glyph the chosen
-    # face lacks, such as the true minus, quietly falls back rather
-    # than rendering nothing.
-    font = str(widget.get("font_family") or "Roboto")
+    # The typeface.  By default the widget follows the dashboard's
+    # font family, through the same helpers as the stock templates,
+    # so a TRMNL dashboard gets the pixel font at its snapped sizes
+    # and Inter for the large figures.
+    #
+    # A per-widget font_family overrides that with any face the
+    # renderer can find, such as one in the custom font directory.
+    # It is drawn at the design sizes, unsnapped and anti-aliased,
+    # whatever the dashboard's settings, and Roboto stays behind it
+    # in the stack so a glyph the face lacks, such as the true minus,
+    # falls back rather than rendering nothing.
+    override = str(widget.get("font_family") or "").strip()
+    fonts = _font_context(override)
 
     # Dates and weekday names come from Babel through the
     # integration's own helpers, so they match its other widgets;
@@ -871,28 +939,14 @@ def _build_weather_wall_context(
         "h": svg_h,
         "design_w": DESIGN_W,
         "design_h": DESIGN_H,
-        "font": font,
+        **fonts,
         "s_uv": s["uv"],
         **_palette(widget, config),
-        "deg_shift_m": round(
-            FONT_M * _DEGREE_EM.get(font, _DEGREE_EM_DEFAULT) / 2, 1
-        ),
-        "pct_shift_s": round(
-            FONT_S * _PERCENT_EM.get(font, _PERCENT_EM_DEFAULT) / 2, 1
-        ),
         "state": state,
         "is_night": state == "night",
         "night_w": NIGHT_W,
         "night_h": NIGHT_H,
         "margin": MARGIN,
-        "font_xl": FONT_XL,
-        "font_l": FONT_L,
-        "font_m": FONT_M,
-        "font_s": FONT_S,
-        "minus_xl": round(FONT_XL * MINUS_SCALE),
-        "minus_m": round(FONT_M * MINUS_SCALE),
-        "dx_xl": round(FONT_XL * MINUS_DX),
-        "dx_m": round(FONT_M * MINUS_DX),
         "left_x": LEFT_X,
         "left_right": LEFT_RIGHT,
         "right_x": RIGHT_X,
