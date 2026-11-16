@@ -1135,6 +1135,13 @@ def _font_context(override: str, weights: dict[str, Any]) -> dict[str, object]:
     return ctx
 
 
+def _now() -> _dt.datetime:
+    """Return the current local time.  Isolated so tests can patch it."""
+    from homeassistant.util import dt as hass_dt
+
+    return hass_dt.now()
+
+
 def _layout_context() -> dict[str, object]:
     """Return the fixed geometry the template draws with.
 
@@ -1491,7 +1498,7 @@ def _build_weather_wall_context(
     states = config.get("states", {})
     entity_id = widget.get("entity", "")
     entity = states.get(entity_id)
-    now = hass_dt.now()
+    now = _now()
     lang = str(config.get("language") or "en")
     s = _phrases(lang)
 
