@@ -288,27 +288,27 @@
       fill="{{ c_night }}"/>
 {%- endif -%}
 {%- if not has_state -%}
-<text x="{{ margin }}" y="{{ y_headline }}" font-size="{{ font_m }}"
+<text x="{{ margin }}" y="{{ y_headline }}" font-size="{{ font_m }}" font-weight="{{ fw_text }}"
       fill="{{ c_sun }}" font-family="{{ ff_m }}"
   >No weather entity, or no forecast available</text>
 {%- else -%}
-<text x="{{ margin }}" y="{{ y_date }}" font-size="{{ font_s }}"
+<text x="{{ margin }}" y="{{ y_date }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       fill="{{ c_fg }}" font-family="{{ ff_s }}">{{ date_text }}</text>
 {#- The header takes the right block's own edges, which are the
     same edges the rain caption uses below it, so the block is
     framed identically top and bottom. -#}
 {%- if header_left -%}
 <text x="{{ right_x }}" y="{{ y_date }}"
-      font-size="{{ font_s }}" fill="{{ c_fg }}"
+      font-size="{{ font_s }}" font-weight="{{ fw_text }}" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ header_left }}</text>
 {%- endif -%}
 {%- if header_max -%}
 <text x="{{ right_right }}" y="{{ y_date }}"
-      font-size="{{ font_s }}" text-anchor="end" fill="{{ c_fg }}"
+      font-size="{{ font_s }}" font-weight="{{ fw_text }}" text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ header_max }}</text>
 {%- endif -%}
 {%- if header_uv -%}
-<text x="{{ right_right }}" y="{{ y_date }}" font-size="{{ font_s }}"
+<text x="{{ right_right }}" y="{{ y_date }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ header_uv }}</text>
 {%- endif -%}
@@ -346,7 +346,7 @@
 {%- endif -%}
 {%- if headline.show -%}
 <text x="{{ temp_x }}" y="{{ y_headline }}" font-size="{{ font_xl }}"
-      font-weight="500" fill="{{ c_fg }}" font-family="{{ ff_xl }}"
+      font-weight="{{ fw_headline }}" fill="{{ c_fg }}" font-family="{{ ff_xl }}"
   >{%- if headline.neg %}<tspan font-size="{{ minus_xl }}">&#8722;</tspan><tspan dx="{{ dx_xl }}">{{ headline.text }}</tspan>{% else %}{{ headline.text }}{% endif -%}</text>
 {%- endif -%}
 {%- if uv_show -%}
@@ -359,44 +359,44 @@
       rx="10" ry="10" fill="{{ c_warn }}"
       stroke="{{ c_warn_stroke }}" stroke-width="2"/>
 <text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_uv_label }}"
-      font-size="{{ font_s }}" font-weight="500" text-anchor="middle"
+      font-size="{{ font_s }}" font-weight="{{ fw_uv }}" text-anchor="middle"
       fill="{{ c_warn_fg }}" font-family="{{ ff_s }}">{{ s_uv }}</text>
 <text x="{{ left_right - uv_badge_w / 2 }}" y="{{ y_headline }}"
-      font-size="{{ font_l }}" font-weight="500" text-anchor="middle"
+      font-size="{{ font_l }}" font-weight="{{ fw_uv }}" text-anchor="middle"
       fill="{{ c_warn_fg }}" font-family="{{ ff_l }}">{{ uv_text }}</text>
 {%- else -%}
 <text x="{{ left_right }}" y="{{ y_uv_label }}" font-size="{{ font_s }}"
-      font-weight="500" text-anchor="end" fill="{{ c_fg }}"
+      font-weight="{{ fw_uv }}" text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ s_uv }}</text>
 <text x="{{ left_right }}" y="{{ y_headline }}" font-size="{{ font_l }}"
-      font-weight="500" text-anchor="end" fill="{{ c_fg }}"
+      font-weight="{{ fw_uv }}" text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ ff_l }}">{{ uv_text }}</text>
 {%- endif -%}
 {%- endif -%}
 {%- if line2_kind == 'plain' -%}
-<text x="{{ temp_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"
+<text x="{{ temp_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}" font-weight="{{ fw_text }}"
       fill="{{ c_fg }}" font-family="{{ ff_m }}">{{ line2_text }}</text>
 {%- elif line2_kind == 'solar' -%}
 <g transform="translate({{ line2_icon_x }}, {{ y_line2 - 9 }})
    scale(1.5)"><use href="#ww-horizon"/></g>
-<text x="{{ line2_text_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"
+<text x="{{ line2_text_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}" font-weight="{{ fw_text }}"
       fill="{{ c_fg }}" font-family="{{ ff_m }}">{{ line2_text }}</text>
 {%- elif line2_kind == 'warn' -%}
 <g transform="translate({{ line2_icon_x }}, {{ y_line2 - 9 }})
    scale(1.5)"><use href="#ww-crystal"/></g>
-<text x="{{ line2_text_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}"
+<text x="{{ line2_text_x }}" y="{{ y_line2 }}" font-size="{{ font_m }}" font-weight="{{ fw_text }}"
       fill="{{ c_fg }}" font-family="{{ ff_m }}">{{ line2_text }}</text>
 {%- endif -%}
 {%- if wind_text -%}
 <g transform="translate({{ wind_icon_x }}, {{ y_metrics - 6 }})
    scale(1.15)"><use href="#ww-wind"/></g>
-<text x="{{ wind_text_x }}" y="{{ y_metrics }}" font-size="{{ font_s }}"
+<text x="{{ wind_text_x }}" y="{{ y_metrics }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       fill="{{ c_fg }}" font-family="{{ ff_s }}">{{ wind_text }}</text>
 {%- endif -%}
 {%- if solar_text -%}
 <g transform="translate({{ solar_icon_x }}, {{ y_metrics - 7 }})
    scale(1.15)"><use href="#ww-horizon"/></g>
-<text x="{{ left_right }}" y="{{ y_metrics }}" font-size="{{ font_s }}"
+<text x="{{ left_right }}" y="{{ y_metrics }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ solar_text }}</text>
 {%- endif -%}
@@ -407,7 +407,7 @@
       width="{{ tile_w }}" height="{{ tile_h }}"
       rx="{{ tile_r }}" ry="{{ tile_r }}" fill="{{ c_night }}"/>
 {%- endif -%}
-<text x="{{ hr.cx }}" y="{{ y_hour_label }}" font-size="{{ font_s }}"
+<text x="{{ hr.cx }}" y="{{ y_hour_label }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ hr.label }}</text>
 {%- if hr.icon -%}
@@ -416,7 +416,7 @@
 {%- endif -%}
 {%- if hr.temp.show -%}
 <text x="{{ hr.cx + (0 if hr.temp.neg else deg_shift_m) }}" y="{{ y_hour_temp }}" font-size="{{ font_m }}"
-      font-weight="500" text-anchor="middle" fill="{{ c_fg }}"
+      font-weight="{{ fw_temperature }}" text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ ff_m }}"
   >{%- if hr.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ hr.temp.text }}</tspan>{% else %}{{ hr.temp.text }}{% endif -%}</text>
 {%- endif -%}
@@ -426,10 +426,10 @@
 <line x1="{{ right_x }}" y1="{{ rain_mid }}"
       x2="{{ right_right }}" y2="{{ rain_mid }}"
       stroke="{{ c_fg }}" stroke-width="1" stroke-dasharray="4 4"/>
-<text x="{{ right_x }}" y="{{ y_caption }}" font-size="{{ font_s }}"
+<text x="{{ right_x }}" y="{{ y_caption }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       fill="{{ c_fg }}" font-family="{{ ff_s }}">{{ caption }}</text>
 {%- if rain_peak -%}
-<text x="{{ right_right }}" y="{{ y_caption }}" font-size="{{ font_s }}"
+<text x="{{ right_right }}" y="{{ y_caption }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="end" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ rain_peak }}</text>
 {%- endif -%}
@@ -438,7 +438,7 @@
       y2="{{ y_rule }}" stroke="{{ c_fg }}" stroke-width="1.5"/>
 {#- The day strip. -#}
 {%- for d in days -%}
-<text x="{{ d.cx }}" y="{{ y_day_label }}" font-size="{{ font_s }}"
+<text x="{{ d.cx }}" y="{{ y_day_label }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ d.label }}</text>
 {%- if d.icon -%}
@@ -447,17 +447,17 @@
 {%- endif -%}
 {%- if d.temp.show -%}
 <text x="{{ d.cx + (0 if d.temp.neg else deg_shift_m) }}" y="{{ y_day_temp }}" font-size="{{ font_m }}"
-      font-weight="500" text-anchor="middle" fill="{{ c_fg }}"
+      font-weight="{{ fw_temperature }}" text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ ff_m }}"
   >{%- if d.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ d.temp.text }}</tspan>{% else %}{{ d.temp.text }}{% endif -%}</text>
 {%- endif -%}
 {%- if d.prob -%}
-<text x="{{ d.cx + pct_shift_s }}" y="{{ y_day_prob }}" font-size="{{ font_s }}"
+<text x="{{ d.cx + pct_shift_s }}" y="{{ y_day_prob }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ d.prob }}</text>
 {%- endif -%}
 {%- if d.remark -%}
-<text x="{{ d.cx }}" y="{{ y_day_remark }}" font-size="{{ font_s }}"
+<text x="{{ d.cx }}" y="{{ y_day_remark }}" font-size="{{ font_s }}" font-weight="{{ fw_text }}"
       text-anchor="middle" fill="{{ c_fg }}"
       font-family="{{ ff_s }}">{{ d.remark }}</text>
 {%- endif -%}

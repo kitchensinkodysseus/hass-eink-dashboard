@@ -1029,7 +1029,40 @@ def _pick_hours(
     return out
 
 
-def _font_context(override: str) -> dict[str, object]:
+# Font roles, in the manner of the stock weather widget: weight-only.
+# The layout is fixed in the 800 x 480 design space and every
+# position is set for these sizes, so a size override could only
+# make text collide.  resolve_font's size half is therefore
+# discarded, as weather.py does; each role's weight can still be
+# changed through the widget's ``fonts`` key.
+_FONT_ROLES: tuple[tuple[str, int, str], ...] = (
+    # role, design size, default weight
+    ("headline", FONT_XL, "medium"),
+    ("temperature", FONT_M, "medium"),
+    ("uv", FONT_L, "medium"),
+    ("text", FONT_S, "regular"),
+)
+
+
+def _role_weights(widget: WeatherWallWidget) -> dict[str, Any]:
+    """Return each font role's resolved weight.
+
+    Args:
+        widget: Widget config, possibly carrying a ``fonts`` mapping.
+
+    Returns:
+        Role name to ``FontWeight``.
+    """
+    from ..const import FontWeight
+    from ..render import resolve_font
+
+    return {
+        role: resolve_font(widget, role, size, FontWeight(default))[1]
+        for role, size, default in _FONT_ROLES
+    }
+
+
+def _font_context(override: str, weights: dict[str, Any]) -> dict[str, object]:
     """Return the template's font stacks, sizes and figure offsets.
 
     Must be called inside the render context that
@@ -1039,13 +1072,17 @@ def _font_context(override: str) -> dict[str, object]:
     Args:
         override: The widget's ``font_family``, or an empty string
             to follow the dashboard.
+        weights: Each role's resolved weight, from ``_role_weights``.
 
     Returns:
         ``ff_*`` font-family stacks and ``font_*`` sizes for the four
-        sizes of the type scale, the reduced minus sign's size and
-        gap, the half-widths that centre column figures on their
-        digits, and ``font_override`` for the template.
+        sizes of the type scale, ``fw_*`` weights for the four font
+        roles, the reduced minus sign's size and gap, the
+        half-widths that centre column figures on their digits, and
+        ``font_override`` for the template.
     """
+    from ..render import _font_weight_svg
+
     design = {"xl": FONT_XL, "l": FONT_L, "m": FONT_M, "s": FONT_S}
 
     if override:
@@ -1059,16 +1096,21 @@ def _font_context(override: str) -> dict[str, object]:
         )
     else:
         from ..fonts import current_font_family, font_family, pixel_font_size
-        from ..render import _load_font
+        from ..render import _load_role_font
 
         family = current_font_family()
         sizes = {k: pixel_font_size(v) for k, v in design.items()}
         stacks = {k: font_family(v, family) for k, v in design.items()}
-        # Column temperatures are weight 500, the percentages 400.
+        # Measured in the weights the figures are drawn in: column
+        # temperatures in the temperature role, percentages as text.
         deg_shift = round(
-            _load_font(FONT_M, medium=True).getlength("\u00b0") / 2, 1
+            _load_role_font(FONT_M, weights["temperature"]).getlength("\u00b0")
+            / 2,
+            1,
         )
-        pct_shift = round(_load_font(FONT_S).getlength("%") / 2, 1)
+        pct_shift = round(
+            _load_role_font(FONT_S, weights["text"]).getlength("%") / 2, 1
+        )
 
     ctx: dict[str, object] = {
         "font_override": bool(override),
@@ -1082,6 +1124,8 @@ def _font_context(override: str) -> dict[str, object]:
     for key in design:
         ctx[f"font_{key}"] = sizes[key]
         ctx[f"ff_{key}"] = stacks[key]
+    for role, weight in weights.items():
+        ctx[f"fw_{role}"] = _font_weight_svg(weight)
     return ctx
 
 
@@ -1455,7 +1499,9 @@ def _build_weather_wall_context(
     # whatever the dashboard's settings, and Roboto stays behind it
     # in the stack so a glyph the face lacks, such as the true minus,
     # falls back rather than rendering nothing.
-    fonts = _font_context(str(widget.get("font_family") or "").strip())
+    fonts = _font_context(
+        str(widget.get("font_family") or "").strip(), _role_weights(widget)
+    )
 
     if entity is None:
         raise RenderNotReady(

@@ -624,6 +624,9 @@ describe("SCHEMAS form grouping", () => {
       ["weather", ["temp", "detail", "precip"], true],
       ["sensor", ["name", "value", "unit"], false],
       ["graph", ["name", "value", "unit", "axis"], false],
+      // The weather wall's layout is fixed, so like weather it
+      // offers weight-only overrides.
+      ["weather_wall", ["headline", "temperature", "uv", "text"], true],
     ];
     for (const [type, roles, weightOnly] of expected) {
       const schema = SCHEMAS[type](DISPLAY);

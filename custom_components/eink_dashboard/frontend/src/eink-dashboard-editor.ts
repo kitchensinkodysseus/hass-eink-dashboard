@@ -981,25 +981,15 @@ export const SCHEMAS: Record<
       ],
     },
     {
-      name: "behaviour",
+      name: "appearance",
       type: "expandable",
       flatten: true,
-      title: "Behaviour",
-      icon: "mdi:clock-outline",
+      title: "Appearance",
+      icon: "mdi:palette",
       schema: [
-                {
+        {
           name: "font_family",
-          default: "Roboto",
-          selector: {
-            select: {
-              mode: "dropdown",
-              custom_value: true,
-              options: [
-                { value: "Roboto", label: "Roboto" },
-                { value: "Drogowskaz", label: "Drogowskaz" },
-              ],
-            },
-          },
+          selector: { text: {} },
         },
         {
           name: "palette",
@@ -1017,7 +1007,25 @@ export const SCHEMAS: Record<
               ],
             },
           },
-        },        
+        },
+        fontsSection(
+          [
+            ["headline", "Headline"],
+            ["temperature", "Temperatures"],
+            ["uv", "UV index"],
+            ["text", "Text"],
+          ],
+          { weightOnly: true }
+        ),
+      ],
+    },
+    {
+      name: "behaviour",
+      type: "expandable",
+      flatten: true,
+      title: "Behaviour",
+      icon: "mdi:clock-outline",
+      schema: [
         {
           name: "uv_hide_below",
           default: 4,
@@ -2175,6 +2183,10 @@ export const SCHEMAS: Record<
 };
 
 export const HELPERS: Record<string, string> = {
+  font_family:
+    "Leave empty to use the dashboard's font. A typeface named here "
+    + "(e.g. one in the custom font directory) is drawn at the "
+    + "widget's own sizes instead.",
   climatology_file:
     "Path to the table from scripts/build_climatology.py, kept "
     + "outside custom_components (e.g. "

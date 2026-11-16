@@ -498,7 +498,11 @@ export interface WeatherWidget extends WidgetBase {
   mode?: WeatherMode;
 }
 
-/** Full-panel weather layout for a wall-mounted e-ink display. */
+/**
+ * Full-panel weather layout for a wall-mounted e-ink display.
+ *
+ * `fonts` roles (weight-only): `headline`, `temperature`, `uv`, `text`.
+ */
 export interface WeatherWallWidget extends WidgetBase {
   type: "weather_wall";
   entity?: string;
