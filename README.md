@@ -14,20 +14,27 @@ layout designed for wall-mounted colour e-ink, developed on a
 Pimoroni Inky Frame 7.3" (Spectra 6). It shows the day or night
 ahead, a two-hourly strip with a rain-probability profile, and a
 week's outlook, with two-colour icons, moon phases, derived frost
-warnings, and notes when temperature or wind is unusual for the time of year.
+warnings, and notes when a night, the UV index or the wind is
+unusual for the time of year. See
+[docs/weather_wall.md](docs/weather_wall.md).
 
-**Status: work in progress.** It works daily on one panel, but it
-currently assumes a 5:3 landscape display and a six-colour palette,
-and has been tested only with the Met Office integration. Making it
-general enough to offer upstream is the aim, not yet the reality.
+The weather wall widget is my own work, built on Andreas Schneider’s integration, without which it would not exist. I developed it with the help of Claude.
+
+**Status:** it works daily on one panel and is being prepared to
+offer upstream. It scales to any widget size, follows the display's
+colour scheme and the dashboard's font, and handles forecasts in any
+units, but has so far been tested only with the Met Office
+integration.
 
 Not included in the repository, by design:
 
 - `climatology.json`, which is location-specific; build your own
-  with `tools/build_climatology.py` (see `tools/README.md`). The
-  widget works without it, minus the "unusual" notes.
-- Third-party fonts. Roboto is the default; others can be supplied
-  through the integration's font directory option.
+  with `scripts/build_climatology.py` (see
+  [docs/climatology.md](docs/climatology.md)). The widget works
+  without it, minus most of the "unusual" notes.
+- Third-party fonts. The widget follows the dashboard's font; a
+  typeface in the integration's custom font directory can be named
+  in the widget instead.
 
 This fork is not affiliated with or endorsed by the original author.
 Licensed under the Apache License 2.0, as is the original.
@@ -212,6 +219,7 @@ The component ships a WYSIWYG Lovelace card for editing the dashboard layout.
 | Graph | Time-series line or bar chart for one or more numeric entities |
 | Gauge | Arc-style gauge for a single numeric entity |
 | Weather | Current conditions + N-day forecast with icons |
+| [Weather Wall](docs/weather_wall.md) | Full-panel forecast for a wall display: the day or night ahead, a two-hourly strip and the week's outlook |
 | Calendar | Upcoming events from a Home Assistant calendar entity |
 | Week calendar | Weekly grid (one column per day, 8:00–20:00 by default) of a calendar entity's events for the current week; the first column follows the first-weekday setting. A widget too short for the grid lists each day's events instead |
 | Device Battery | Battery level indicator for a device |

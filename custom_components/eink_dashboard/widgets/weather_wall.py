@@ -1,4 +1,4 @@
-# Copyright 2026 Andreas Schneider
+# Copyright 2026 Kit Lerman
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,22 +14,31 @@
 
 """Weather wall widget context builder.
 
-A full-panel weather layout for a wall-mounted six-colour e-ink
-display.  Unlike the stock weather widget this one owns the entire
-canvas: it paints its own ground, selects one of three layouts by
-time of day, and reads both the daily and the hourly forecast.
+A full-panel weather layout for a wall-mounted e-ink display.
+Unlike the stock weather widget this one owns the entire canvas: it
+paints its own ground, selects one of three layouts by time of day,
+and reads both the daily and the hourly forecast.
 
-Geometry is fixed to an 800 x 480 panel.  Every dimension below is a
-real panel pixel, so the numbers here and the numbers in the design
-drawings are the same numbers.
+The layout is drawn in an 800 x 480 design space, so the numbers
+here and the numbers in the design drawings are the same numbers.
+The template's viewBox scales it to the widget's actual size,
+keeping its proportions; a 5:3 widget fills exactly.
 
 Three layouts:
 
-* **morning** — today's maximum as the headline, today's remaining
-  hours on the right, the following days below.
-* **evening** — tonight's minimum as the headline, tomorrow's hours
-  on the right, the days from the day after tomorrow below.
-* **night** — as evening, with the tonight block on a black ground.
+* **morning** -- today's maximum as the headline, the next hours on
+  the right, the following days below.
+* **evening** -- from 17:00 while the sun is up: tonight's minimum
+  as the headline with the times of sunset and sunrise, tomorrow's
+  hours on the right, the days from the day after tomorrow below.
+* **night** -- as evening once the sun has set, with the tonight
+  block on a dark ground, the moon and any cloud as its icon, and a
+  frost warning when the hours ahead call for one.
+
+Colours come from a palette matched to the display's colour scheme;
+text follows the dashboard's font unless the widget names one.
+Forecasts in other units are converted to metric for the widget's
+thresholds and printed in their own units.
 
 Icons are named here and drawn in the template.  The integration's
 ``_build_inline_svg()`` flattens every path to a single colour, which
