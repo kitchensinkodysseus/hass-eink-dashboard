@@ -613,3 +613,5 @@ class WeatherWallWidget(WidgetBase, total=False):
     """Typeface overriding the dashboard font, drawn unsnapped."""
     palette: str
     """Palette overriding the display colour scheme, or ``"auto"``."""
+    climatology_file: str
+    """Absolute path to the table built by build_climatology.py."""

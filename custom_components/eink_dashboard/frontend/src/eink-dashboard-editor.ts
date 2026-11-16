@@ -974,6 +974,10 @@ export const SCHEMAS: Record<
           name: "temperature_entity",
           selector: { entity: { domain: "sensor" } },
         },
+        {
+          name: "climatology_file",
+          selector: { text: {} },
+        },
       ],
     },
     {
@@ -2171,6 +2175,11 @@ export const SCHEMAS: Record<
 };
 
 export const HELPERS: Record<string, string> = {
+  climatology_file:
+    "Path to the table from scripts/build_climatology.py, kept "
+    + "outside custom_components (e.g. "
+    + "/config/eink_dashboard/climatology.json). Without it, notes on "
+    + "unusual weather are left out.",
   row_height:
     "Rows never grow taller than this; extra widget height stays "
     + "empty below the list.  Leave empty to use the display's "
@@ -2315,6 +2324,7 @@ export const LABELS: Record<string, string> = {
   force_state: "Force layout (preview)",
   font_family: "Typeface",
   palette: "Palette",
+  climatology_file: "Climatology file",
 };
 
 // ── HA component loader ──────────────────────────────────────────

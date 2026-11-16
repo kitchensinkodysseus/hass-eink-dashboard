@@ -39,17 +39,23 @@ Two sources, because no single one has everything:
   a wider window to compensate; it varies smoothly with the season
   rather than synoptically, so this costs little.
 
-This script must not live inside the component directory.  That
-directory contains an http.py, and a script's own directory goes
-first on Python's search path, so urllib would import it in place
-of the standard library's http package and fail.
+Usage, from the repository root:
 
-Usage:
+    python3 scripts/build_climatology.py \\
+        --latitude 51.48 --longitude -0.01 --output climatology.json
 
-    python3 tools/build_climatology.py
+Then copy the file somewhere in the Home Assistant configuration
+directory, outside custom_components, and give its path in the
+widget's climatology_file option; see docs/climatology.md.
 
-Edit LATITUDE and LONGITUDE below first.  Open-Meteo data is
-CC BY 4.0; see https://open-meteo.com/en/license
+The location is taken from the command line and is not written into
+the output, so the table cannot disclose it wherever it ends up.  A
+location a kilometre or two away gives the same answer: the
+reanalysis grid is about 25 km across.
+
+Uses only the standard library, so it runs with any Python 3.
+
+Open-Meteo data is CC BY 4.0; see https://open-meteo.com/en/license
 
 Run once.  The output does not need regenerating until the 2001 to
 2030 normals are published, though rerunning it occasionally will
@@ -58,6 +64,7 @@ lengthen the ultraviolet baseline.
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 import sys
@@ -69,21 +76,6 @@ from pathlib import Path
 
 # ---- configuration -------------------------------------------------
 
-# Read co-ords rom tools/location.json, which is not tracked, so the
-# repository never carries a real address.  The file is two lines:
-#     {"latitude": -x.xx, "longitude": -x.xx}
-_LOCATION_PATH = Path(__file__).resolve().parent / "location.json"
-try:
-    _location = json.loads(_LOCATION_PATH.read_text())
-    LATITUDE = float(_location["latitude"])
-    LONGITUDE = float(_location["longitude"])
-except Exception as exc:
-    raise SystemExit(
-        f"Could not read {_LOCATION_PATH}: {exc}\n"
-        'Create it containing, for example:\n'
-        '    {"latitude": 51.58, "longitude": -0.10}'
-    )
-
 # WMO standard normal period, for everything from the archive.
 START = "1991-01-01"
 END = "2020-12-31"
@@ -93,10 +85,6 @@ END = "2020-12-31"
 # these bounds are deliberately optimistic at both ends.
 UV_FIRST_YEAR = 2013
 UV_LAST_YEAR = dt.date.today().year
-
-# Local timezone, so daily aggregation matches local days rather
-# than UTC days.  Matters most for the overnight minimum.
-TIMEZONE = "Europe/London"
 
 # Half-width of the window around each calendar date, in days.
 # Seven gives fifteen days per year of record, so 450 samples over
@@ -132,12 +120,6 @@ AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 # only that it is not hammered.
 PAUSE_SECONDS = 1.0
 
-# Written into the component directory, two levels up from tools/.
-OUTPUT = (
-    Path(__file__).resolve().parent.parent
-    / "custom_components" / "eink_dashboard" / "climatology.json"
-)
-
 # ---- helpers -------------------------------------------------------
 
 
@@ -161,28 +143,33 @@ def get_json(url: str, params: dict) -> dict:
         return json.load(response)
 
 
-def fetch_daily(variable: str) -> tuple[list[str], list[float | None]]:
+def fetch_daily(
+    place: dict[str, object], variable: str
+) -> tuple[list[str], list[float | None]]:
     """Fetch one daily archive variable for the whole baseline.
 
     Args:
+        place: ``latitude``, ``longitude`` and ``timezone`` query
+            parameters.
         variable: An Open-Meteo daily variable name.
 
     Returns:
         ``(dates, values)`` as parallel lists.
     """
-    payload = get_json(ARCHIVE_URL, {
-        "latitude": LATITUDE,
-        "longitude": LONGITUDE,
-        "start_date": START,
-        "end_date": END,
-        "daily": variable,
-        "timezone": TIMEZONE,
-    })
+    payload = get_json(
+        ARCHIVE_URL,
+        {
+            **place,
+            "start_date": START,
+            "end_date": END,
+            "daily": variable,
+        },
+    )
     daily = payload.get("daily", {})
     return daily.get("time", []), daily.get(variable, [])
 
 
-def fetch_uv_year(year: int) -> dict[str, float]:
+def fetch_uv_year(place: dict[str, object], year: int) -> dict[str, float]:
     """Fetch one year of hourly ultraviolet and reduce to daily peaks.
 
     The air quality endpoint offers ultraviolet only hourly, and the
@@ -194,6 +181,8 @@ def fetch_uv_year(year: int) -> dict[str, float]:
     out and take the whole run with it.
 
     Args:
+        place: ``latitude``, ``longitude`` and ``timezone`` query
+            parameters.
         year: Calendar year to fetch.
 
     Returns:
@@ -205,19 +194,20 @@ def fetch_uv_year(year: int) -> dict[str, float]:
         # The endpoint refuses a range that runs past the data, so
         # the current year stops at yesterday.
         end = (today - dt.timedelta(days=1)).isoformat()
-    payload = get_json(AIR_QUALITY_URL, {
-        "latitude": LATITUDE,
-        "longitude": LONGITUDE,
-        "start_date": f"{year}-01-01",
-        "end_date": end,
-        "hourly": "uv_index",
-        "timezone": TIMEZONE,
-    })
+    payload = get_json(
+        AIR_QUALITY_URL,
+        {
+            **place,
+            "start_date": f"{year}-01-01",
+            "end_date": end,
+            "hourly": "uv_index",
+        },
+    )
     hourly = payload.get("hourly", {})
     times = hourly.get("time", [])
     values = hourly.get("uv_index", [])
     peaks: dict[str, float] = {}
-    for stamp, value in zip(times, values):
+    for stamp, value in zip(times, values, strict=False):
         if value is None:
             continue
         day = stamp[:10]
@@ -316,8 +306,7 @@ def store(
             continue
         ordered = sorted(samples)
         table[key][name] = {
-            f"p{p}": round(percentile(ordered, p), 2)
-            for p in PERCENTILES
+            f"p{p}": round(percentile(ordered, p), 2) for p in PERCENTILES
         }
     return len(buckets["07-01"])
 
@@ -325,12 +314,57 @@ def store(
 # ---- main ----------------------------------------------------------
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the command line."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build the climatology table for the weather wall widget "
+            "from Open-Meteo reanalysis data (CC BY 4.0)."
+        )
+    )
+    parser.add_argument(
+        "--latitude", type=float, required=True, help="decimal degrees"
+    )
+    parser.add_argument(
+        "--longitude",
+        type=float,
+        required=True,
+        help="decimal degrees, negative west of Greenwich",
+    )
+    parser.add_argument(
+        "--timezone",
+        default="auto",
+        help=(
+            "IANA time zone for daily aggregation, e.g. Europe/London; "
+            "the default, auto, takes it from the coordinates"
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("climatology.json"),
+        help="file to write (default: climatology.json here)",
+    )
+    args = parser.parse_args(argv)
+    if not -90 <= args.latitude <= 90:
+        parser.error("latitude must be between -90 and 90")
+    if not -180 <= args.longitude <= 180:
+        parser.error("longitude must be between -180 and 180")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
     """Download, compute and write the climatology table."""
-    print(f"Location: {LATITUDE}, {LONGITUDE}")
+    args = parse_args(argv)
+    place: dict[str, object] = {
+        "latitude": args.latitude,
+        "longitude": args.longitude,
+        "timezone": args.timezone,
+    }
     print(f"Archive:  {START} to {END}, window +/- {WINDOW_DAYS} days")
-    print(f"UV:       {UV_FIRST_YEAR} onward, "
-          f"window +/- {UV_WINDOW_DAYS} days")
+    print(
+        f"UV:       {UV_FIRST_YEAR} onward, window +/- {UV_WINDOW_DAYS} days"
+    )
     print(f"Storing:  {len(PERCENTILES)} percentiles per measure\n")
 
     table: dict[str, dict[str, dict[str, float]]] = {
@@ -343,16 +377,18 @@ def main() -> int:
     for name, variable in MEASURES.items():
         print(f"{name:6s} {variable:24s} ... ", end="", flush=True)
         try:
-            dates, values = fetch_daily(variable)
+            dates, values = fetch_daily(place, variable)
         except urllib.error.HTTPError as exc:
             print(f"unavailable ({exc.code})")
             continue
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"failed ({exc})")
             continue
 
         pairs = [
-            (d, float(v)) for d, v in zip(dates, values) if v is not None
+            (d, float(v))
+            for d, v in zip(dates, values, strict=False)
+            if v is not None
         ]
         if not pairs:
             print("no data")
@@ -370,11 +406,11 @@ def main() -> int:
     for year in range(UV_FIRST_YEAR, UV_LAST_YEAR + 1):
         print(f"       {year} ... ", end="", flush=True)
         try:
-            peaks = fetch_uv_year(year)
+            peaks = fetch_uv_year(place, year)
         except urllib.error.HTTPError as exc:
             print(f"unavailable ({exc.code})")
             continue
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"failed ({exc})")
             continue
         if not peaks:
@@ -388,8 +424,10 @@ def main() -> int:
     if uv_pairs:
         count = store(table, "uv", uv_pairs, UV_WINDOW_DAYS)
         span = f"{min(years_got)} to {max(years_got)}"
-        print(f"       total: {len(uv_pairs)} days over {span}, "
-              f"{count} per window")
+        print(
+            f"       total: {len(uv_pairs)} days over {span}, "
+            f"{count} per window"
+        )
         obtained.append("uv")
         notes["uv"] = f"CAMS air quality {span}"
     else:
@@ -399,11 +437,12 @@ def main() -> int:
         print("\nNothing was downloaded; the file has not been written.")
         return 1
 
+    # The coordinates are deliberately left out: the widget does not
+    # need them, and the file should disclose nothing about where it
+    # was built for.
     document = {
         "meta": {
-            "latitude": LATITUDE,
-            "longitude": LONGITUDE,
-            "timezone": TIMEZONE,
+            "timezone": args.timezone,
             "window_days": WINDOW_DAYS,
             "uv_window_days": UV_WINDOW_DAYS,
             "percentiles": list(PERCENTILES),
@@ -415,10 +454,11 @@ def main() -> int:
         "days": table,
     }
 
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(json.dumps(document, separators=(",", ":")))
-    size = OUTPUT.stat().st_size
-    print(f"\nWrote {OUTPUT} ({size // 1024} kB)")
+    output: Path = args.output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(document, separators=(",", ":")))
+    size = output.stat().st_size
+    print(f"\nWrote {output} ({size // 1024} kB)")
     print(f"Measures: {', '.join(obtained)}")
     return 0
 

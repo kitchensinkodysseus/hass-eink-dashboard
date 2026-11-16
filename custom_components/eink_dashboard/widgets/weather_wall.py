@@ -54,26 +54,67 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Climatological percentile thresholds, keyed by "MM-DD".  Built by
-# tools/build_climatology.py; see that script for the sources and
-# the baseline periods.  Loaded once at import rather than per
-# render: it never changes between restarts.  A missing file
-# degrades to no remarkable line rather than breaking the panel,
-# which matters because it is not in the upstream repository and a
-# future merge could lose it.
-_CLIMATOLOGY_PATH = Path(__file__).parent.parent / "climatology.json"
+# Climatological percentile thresholds, keyed by "MM-DD", built by
+# scripts/build_climatology.py (see docs/climatology.md).  The file
+# belongs outside the component directory, at the path given by the
+# widget's climatology_file option, because an update replaces that
+# directory wholesale and would delete it.  Without the option the
+# component directory is still tried, for installations that put it
+# there before the option existed.
+_LEGACY_CLIMATOLOGY_PATH = Path(__file__).parent.parent / "climatology.json"
 
-try:
-    _CLIMATOLOGY: dict = json.loads(_CLIMATOLOGY_PATH.read_text()).get(
-        "days", {}
-    )
-except Exception as exc:  # noqa: BLE001
-    _LOGGER.warning(
-        "weather_wall: no climatology table (%s); the remarkable "
-        "line will be suppressed",
-        exc,
-    )
-    _CLIMATOLOGY = {}
+# Path -> (modification time, table).  The file is read on first use
+# and again only when it changes.  Rendering runs in an executor
+# thread, so the read does not block the event loop.
+_CLIMATOLOGY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CLIMATOLOGY_WARNED: set[str] = set()
+
+
+def _climatology(option: object) -> dict[str, Any]:
+    """Return the climatology table for a widget, or ``{}``.
+
+    A missing or unreadable table only suppresses the remarks under
+    each day; it never stops the panel rendering.
+
+    Args:
+        option: The widget's ``climatology_file``: an absolute path,
+            or empty to try the component directory.
+
+    Returns:
+        Percentile bands keyed by ``"MM-DD"``.
+    """
+    path = Path(str(option)) if option else _LEGACY_CLIMATOLOGY_PATH
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError as exc:
+        # Only a file someone asked for is worth a warning; without
+        # the option, having no table is the normal state.
+        if option and key not in _CLIMATOLOGY_WARNED:
+            _CLIMATOLOGY_WARNED.add(key)
+            _LOGGER.warning(
+                "weather_wall: climatology file %s not found (%s); "
+                "the remarks under each day will be suppressed",
+                key,
+                exc,
+            )
+        return {}
+    cached = _CLIMATOLOGY_CACHE.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    try:
+        days = json.loads(path.read_text()).get("days", {})
+        table = days if isinstance(days, dict) else {}
+    except (OSError, ValueError, AttributeError) as exc:
+        _LOGGER.warning(
+            "weather_wall: could not read climatology file %s (%s)",
+            key,
+            exc,
+        )
+        table = {}
+    _CLIMATOLOGY_CACHE[key] = (mtime, table)
+    return table
+
 
 # ---------------------------------------------------------------
 # Layout constants.  All values are 800 x 480 panel pixels.
@@ -722,7 +763,9 @@ def _frost_warning(
     return ""
 
 
-def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
+def _remarkable(
+    day: dict[str, Any], when: Any, s: dict, climate: dict[str, Any]
+) -> str:
     """Return a short note when one measure is unusual, else "".
 
     Each candidate is compared against a percentile for the calendar
@@ -730,13 +773,19 @@ def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
     threshold by the largest relative margin wins.  Failing that, a
     cold night is noted anyway, since four degrees is ordinary in
     January and still means scraping the car.
+
+    Args:
+        day: One daily forecast entry.
+        when: The entry's local date and time, or None.
+        s: The panel phrases for the display language.
+        climate: The climatology table, possibly empty.
     """
     low = _num(day.get("templow"))
     candidates: list[tuple[float, str]] = []
 
     bands = None
-    if when is not None and _CLIMATOLOGY:
-        bands = _CLIMATOLOGY.get(f"{when.month:02d}-{when.day:02d}")
+    if when is not None and climate:
+        bands = climate.get(f"{when.month:02d}-{when.day:02d}")
 
     if bands:
 
@@ -1178,6 +1227,7 @@ def _day_strip(
     hass_dt: Any,
     lang: str,
     s: dict[str, Any],
+    climate: dict[str, Any],
 ) -> list[dict[str, object]]:
     """Return the columns of the week's outlook along the bottom.
 
@@ -1210,7 +1260,7 @@ def _day_strip(
                 "label": _weekday_abbrev(when.date(), lang) if when else "",
                 "temp": _temp(e.get("temperature")),
                 "prob": _percent(e.get("precipitation_probability")),
-                "remark": _remarkable(e, when, s),
+                "remark": _remarkable(e, when, s, climate),
             }
         )
     return days
@@ -1226,8 +1276,8 @@ def _build_weather_wall_context(
         widget: Widget config.  Recognised keys: ``entity``,
             ``moon_entity``, ``temperature_entity``,
             ``forecast_days``, ``uv_hide_below``, ``uv_warn_above``,
-            ``force_state``, ``font_family``, ``palette``, ``x``,
-            ``y``, ``w``, ``h``.
+            ``force_state``, ``font_family``, ``palette``,
+            ``climatology_file``, ``x``, ``y``, ``w``, ``h``.
         config: Display config with ``width``, ``height``,
             ``states``, ``language`` and ``color_scheme``.
 
@@ -1381,6 +1431,12 @@ def _build_weather_wall_context(
         "rain_peak": _percent(rain_day.get("precipitation_probability")),
         "caption": s["chance"][_precip_word(hours_raw)],
         "days": _day_strip(
-            daily, widget.get("forecast_days", 7), state, hass_dt, lang, s
+            daily,
+            widget.get("forecast_days", 7),
+            state,
+            hass_dt,
+            lang,
+            s,
+            _climatology(widget.get("climatology_file")),
         ),
     }

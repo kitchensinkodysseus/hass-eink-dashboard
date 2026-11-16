@@ -510,6 +510,8 @@ export interface WeatherWallWidget extends WidgetBase {
   force_state?: "auto" | "morning" | "evening" | "night";
   font_family?: string;
   palette?: string;
+  /** Path to the table built by scripts/build_climatology.py. */
+  climatology_file?: string;
 }
 
 /**
