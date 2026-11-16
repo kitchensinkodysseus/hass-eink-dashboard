@@ -85,6 +85,11 @@ def _climatology(option: object) -> dict[str, Any]:
     """
     path = Path(str(option)) if option else _LEGACY_CLIMATOLOGY_PATH
     key = str(path)
+    if path.is_dir():
+        # A path still being typed in the editor, whose live preview
+        # renders after each change; "/" and "/config" are not worth
+        # a warning.
+        return {}
     try:
         mtime = path.stat().st_mtime
     except OSError as exc:
@@ -509,6 +514,126 @@ def _num(value: Any) -> float | None:
         return None
 
 
+# Conversions into the units the thresholds above are written in:
+# degrees Celsius, kilometres per hour and millimetres.  Each entry
+# is (factor, offset) such that metric = value * factor + offset.
+_TO_CELSIUS: dict[str, tuple[float, float]] = {
+    "°C": (1.0, 0.0),
+    "°F": (5 / 9, -32 * 5 / 9),
+    "K": (1.0, -273.15),
+}
+_TO_KMH: dict[str, tuple[float, float]] = {
+    "km/h": (1.0, 0.0),
+    "m/s": (3.6, 0.0),
+    "mph": (1.609344, 0.0),
+    "kn": (1.852, 0.0),
+    "ft/s": (1.09728, 0.0),
+}
+_TO_MM: dict[str, tuple[float, float]] = {
+    "mm": (1.0, 0.0),
+    "cm": (10.0, 0.0),
+    "in": (25.4, 0.0),
+}
+_IDENTITY = (1.0, 0.0)
+
+
+def _rate(
+    table: dict[str, tuple[float, float]], unit: str, what: str
+) -> tuple[float, float]:
+    """Return the conversion for ``unit``, or identity if unknown."""
+    rate = table.get(unit)
+    if rate is None:
+        _LOGGER.debug(
+            "weather_wall: unknown %s unit %r, treated as metric", what, unit
+        )
+        return _IDENTITY
+    return rate
+
+
+class _Units:
+    """Convert a weather entity's units to metric and back.
+
+    Every threshold in this module, and the climatology table, is in
+    degrees Celsius, kilometres per hour and millimetres.  Rather
+    than restate each threshold per unit system, forecast entries are
+    converted to metric once on arrival, and figures are converted
+    back to the entity's own units only where they are printed.  For
+    a metric entity both directions are the identity, and entries are
+    passed through untouched.
+    """
+
+    def __init__(self, attrs: dict[str, Any]) -> None:
+        """Read the units from the weather entity's attributes."""
+        self.speed_unit = str(attrs.get("wind_speed_unit") or "km/h")
+        self._temp = _rate(
+            _TO_CELSIUS,
+            str(attrs.get("temperature_unit") or "°C"),
+            "temperature",
+        )
+        self._speed = _rate(_TO_KMH, self.speed_unit, "wind speed")
+        self._precip = _rate(
+            _TO_MM,
+            str(attrs.get("precipitation_unit") or "mm"),
+            "precipitation",
+        )
+        self.metric_already = (
+            self._temp == self._speed == self._precip == _IDENTITY
+        )
+
+    @staticmethod
+    def _apply(value: Any, rate: tuple[float, float]) -> Any:
+        """Return ``value`` converted by ``rate``, or as it was."""
+        n = _num(value)
+        if n is None or rate == _IDENTITY:
+            return value
+        return n * rate[0] + rate[1]
+
+    @staticmethod
+    def _invert(value: Any, rate: tuple[float, float]) -> Any:
+        """Return a metric ``value`` in the entity's own unit."""
+        n = _num(value)
+        if n is None or rate == _IDENTITY:
+            return value
+        # Rounded so that a round trip cannot turn the 49.5 a
+        # provider sent into 49.4999999 and round it the other way.
+        return round((n - rate[1]) / rate[0], 6)
+
+    def metric(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """Return a forecast entry with its values in metric units."""
+        if self.metric_already:
+            return entry
+        out = dict(entry)
+        for key, rate in (
+            ("temperature", self._temp),
+            ("templow", self._temp),
+            ("wind_speed", self._speed),
+            ("wind_gust_speed", self._speed),
+            ("precipitation", self._precip),
+        ):
+            if key in out:
+                out[key] = self._apply(out[key], rate)
+        return out
+
+    def temp(self, celsius: Any) -> Any:
+        """Return a Celsius temperature in the entity's unit."""
+        return self._invert(celsius, self._temp)
+
+    def speed(self, kmh: Any) -> Any:
+        """Return a km/h speed in the entity's unit."""
+        return self._invert(kmh, self._speed)
+
+    def sensor_temp(self, value: Any, unit: Any) -> Any:
+        """Return a sensor's reading in the weather entity's unit.
+
+        A sensor in the same unit as the weather entity, or one with
+        no recognised unit, is shown as it reads.
+        """
+        rate = _TO_CELSIUS.get(str(unit or ""))
+        if rate is None or rate == self._temp:
+            return value
+        return self.temp(self._apply(value, rate))
+
+
 def _temp(value: Any) -> dict[str, object]:
     """Format a temperature for display as whole degrees.
 
@@ -517,7 +642,7 @@ def _temp(value: Any) -> dict[str, object]:
     negative values into their neighbouring columns.
 
     Args:
-        value: Temperature in degrees Celsius, or ``None``.
+        value: Temperature in the entity's own unit, or ``None``.
 
     Returns:
         ``{"show": bool, "neg": bool, "text": str}`` where ``text``
@@ -764,7 +889,11 @@ def _frost_warning(
 
 
 def _remarkable(
-    day: dict[str, Any], when: Any, s: dict, climate: dict[str, Any]
+    day: dict[str, Any],
+    when: Any,
+    s: dict,
+    climate: dict[str, Any],
+    units: _Units,
 ) -> str:
     """Return a short note when one measure is unusual, else "".
 
@@ -779,6 +908,7 @@ def _remarkable(
         when: The entry's local date and time, or None.
         s: The panel phrases for the display language.
         climate: The climatology table, possibly empty.
+        units: Converts the figures shown back to the entity's units.
     """
     low = _num(day.get("templow"))
     candidates: list[tuple[float, str]] = []
@@ -806,7 +936,8 @@ def _remarkable(
         gust = _num(day.get("wind_gust_speed"))
         margin = over("gust", gust, REMARK_GUST_MIN)
         if margin is not None and gust is not None:
-            candidates.append((margin, s["gust"].format(v=round(gust))))
+            shown = round(_num(units.speed(gust)) or 0)
+            candidates.append((margin, s["gust"].format(v=shown)))
 
         # Two-tailed, measured against the width of the band rather
         # than the value, since a minimum near zero would otherwise
@@ -816,7 +947,7 @@ def _remarkable(
         warm = band.get(REMARK_HIGH)
         if low is not None and cold is not None and warm is not None:
             width = max(1.0, warm - cold)
-            t = _signed(_temp(low))
+            t = _signed(_temp(units.temp(low)))
             if low < cold:
                 candidates.append(
                     ((cold - low) / width, s["cold"].format(t=t))
@@ -829,7 +960,7 @@ def _remarkable(
     if candidates:
         return max(candidates, key=lambda c: c[0])[1]
     if low is not None and low <= COLD_NOTE_AT:
-        return s["min"].format(t=_signed(_temp(low)))
+        return s["min"].format(t=_signed(_temp(units.temp(low))))
     return ""
 
 
@@ -1030,6 +1161,7 @@ def _second_line(
     hass_dt: Any,
     now: _dt.datetime,
     s: dict[str, Any],
+    units: _Units,
 ) -> tuple[str, str]:
     """Return the kind and text of the line under the headline.
 
@@ -1046,7 +1178,7 @@ def _second_line(
     """
     sunset, sunrise, sun_up = sun
     if state == "morning":
-        low = _temp(today.get("templow"))
+        low = _temp(units.temp(today.get("templow")))
         if low["show"]:
             return "plain", s["overnight"].format(t=_signed(low))
         return "", ""
@@ -1067,7 +1199,7 @@ def _second_line(
     return "", ""
 
 
-def _wind_text(today: dict[str, Any], unit: str) -> str:
+def _wind_text(today: dict[str, Any], units: _Units) -> str:
     """Return the wind line: bearing, mean speed and any gust.
 
     The gust only earns its place when it is meaningfully above the
@@ -1084,8 +1216,11 @@ def _wind_text(today: dict[str, Any], unit: str) -> str:
         and gust >= speed * GUST_RATIO
         and gust - speed >= GUST_MARGIN
     ):
-        return f"{bearing} {round(speed)}–{round(gust)} {unit}"
-    return f"{bearing} {round(speed)} {unit}"
+        lo = round(_num(units.speed(speed)) or 0)
+        hi = round(_num(units.speed(gust)) or 0)
+        return f"{bearing} {lo}–{hi} {units.speed_unit}"
+    lo = round(_num(units.speed(speed)) or 0)
+    return f"{bearing} {lo} {units.speed_unit}"
 
 
 def _uv_context(
@@ -1137,6 +1272,7 @@ def _hour_strip(
     hass_dt: Any,
     sunset: Any,
     sunrise: Any,
+    units: _Units,
 ) -> list[dict[str, object]]:
     """Return the columns of the two-hourly strip on the right."""
     hours = []
@@ -1150,7 +1286,7 @@ def _hour_strip(
                 "icon": _icon_name(e, dark),
                 "dark": dark,
                 "label": e.get("_label", ""),
-                "temp": _temp(e.get("temperature")),
+                "temp": _temp(units.temp(e.get("temperature"))),
             }
         )
     return hours
@@ -1228,6 +1364,7 @@ def _day_strip(
     lang: str,
     s: dict[str, Any],
     climate: dict[str, Any],
+    units: _Units,
 ) -> list[dict[str, object]]:
     """Return the columns of the week's outlook along the bottom.
 
@@ -1258,9 +1395,9 @@ def _day_strip(
                 # night icon.
                 "icon": _icon_name(e, False),
                 "label": _weekday_abbrev(when.date(), lang) if when else "",
-                "temp": _temp(e.get("temperature")),
+                "temp": _temp(units.temp(e.get("temperature"))),
                 "prob": _percent(e.get("precipitation_probability")),
-                "remark": _remarkable(e, when, s, climate),
+                "remark": _remarkable(e, when, s, climate, units),
             }
         )
     return days
@@ -1327,8 +1464,13 @@ def _build_weather_wall_context(
         )
 
     attrs = entity.get("attributes", {})
-    daily: list[dict[str, Any]] = attrs.get("forecast", []) or []
-    hourly: list[dict[str, Any]] = attrs.get("forecast_hourly", []) or []
+    units = _Units(attrs)
+    daily: list[dict[str, Any]] = [
+        units.metric(e) for e in attrs.get("forecast", []) or []
+    ]
+    hourly: list[dict[str, Any]] = [
+        units.metric(e) for e in attrs.get("forecast_hourly", []) or []
+    ]
 
     if not daily:
         raise RenderNotReady(
@@ -1359,17 +1501,31 @@ def _build_weather_wall_context(
     morning = state == "morning"
 
     # ---- headline --------------------------------------------
-    headline = _temp(today.get("temperature" if morning else "templow"))
+    headline = _temp(
+        units.temp(today.get("temperature" if morning else "templow"))
+    )
     # A temperature sensor applies only to the morning headline,
     # where the number is a live reading rather than a forecast.
     temp_entity = widget.get("temperature_entity", "")
     if morning and temp_entity:
         reading = states.get(temp_entity)
         if reading is not None:
-            headline = _temp(reading.get("state"))
+            headline = _temp(
+                units.sensor_temp(
+                    reading.get("state"),
+                    reading.get("attributes", {}).get("unit_of_measurement"),
+                )
+            )
 
     line2_kind, line2_text = _second_line(
-        state, today, hourly, (sunset, sunrise, sun_up), hass_dt, now, s
+        state,
+        today,
+        hourly,
+        (sunset, sunrise, sun_up),
+        hass_dt,
+        now,
+        s,
+        units,
     )
 
     # ---- the bottom metrics line -----------------------------
@@ -1391,7 +1547,7 @@ def _build_weather_wall_context(
 
     header_max = ""
     if not morning:
-        hi = _temp(tomorrow.get("temperature"))
+        hi = _temp(units.temp(tomorrow.get("temperature")))
         header_max = s["max"].format(t=_signed(hi)) if hi["show"] else ""
 
     moon_state = states.get(
@@ -1419,13 +1575,13 @@ def _build_weather_wall_context(
         "headline": headline,
         "line2_kind": line2_kind,
         "line2_text": line2_text,
-        "wind_text": _wind_text(today, attrs.get("wind_speed_unit", "km/h")),
+        "wind_text": _wind_text(today, units),
         "solar_text": solar_text,
         **_uv_context(widget, today, state),
         "header_left": "" if morning else s["tomorrow"],
         "header_max": header_max,
         "header_uv": "",
-        "hours": _hour_strip(hours_raw, hass_dt, sunset, sunrise),
+        "hours": _hour_strip(hours_raw, hass_dt, sunset, sunrise, units),
         "rain_d": rain_d,
         "rain_mid": round(rain_mid, 1),
         "rain_peak": _percent(rain_day.get("precipitation_probability")),
@@ -1438,5 +1594,6 @@ def _build_weather_wall_context(
             lang,
             s,
             _climatology(widget.get("climatology_file")),
+            units,
         ),
     }
