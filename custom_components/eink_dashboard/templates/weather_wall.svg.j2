@@ -421,6 +421,12 @@
   >{%- if hr.temp.neg %}<tspan font-size="{{ minus_m }}">&#8722;</tspan><tspan dx="{{ dx_m }}">{{ hr.temp.text }}</tspan>{% else %}{{ hr.temp.text }}{% endif -%}</text>
 {%- endif -%}
 {%- endfor -%}
+{%- if hours_note -%}
+<text x="{{ (right_x + right_right) / 2 }}" y="{{ y_no_hourly }}"
+      font-size="{{ font_s }}" font-weight="{{ fw_text }}"
+      text-anchor="middle" fill="{{ c_fg }}"
+      font-family="{{ ff_s }}">{{ hours_note }}</text>
+{%- endif -%}
 {%- if rain_d -%}
 <path d="{{ rain_d }}" fill="{{ c_fg }}"/>
 <line x1="{{ right_x }}" y1="{{ rain_mid }}"

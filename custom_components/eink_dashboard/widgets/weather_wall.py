@@ -281,6 +281,7 @@ _WALL_PHRASES: dict[str, dict[str, Any]] = {
         "gust": "gust {v}",
         "uv": "UV",
         "uv_value": "UV {v}",
+        "no_hourly": "No hourly forecast",
         "chance": {
             "rain": "Chance of rain",
             "snow": "Chance of snow",
@@ -301,6 +302,7 @@ _WALL_PHRASES: dict[str, dict[str, Any]] = {
         "mild": "ciepło {t}",
         "cold": "zimno {t}",
         "gust": "porywy {v}",
+        "no_hourly": "Brak prognozy godzinowej",
         "chance": {
             "rain": "Szansa na deszcz",
             "snow": "Szansa na śnieg",
@@ -364,6 +366,10 @@ HOUR_SLOTS = 7
 HOUR_W = (RIGHT_RIGHT - RIGHT_X) / HOUR_SLOTS
 Y_HOUR_LABEL = 92
 HOUR_ICON_CY = 130
+# A provider without an hourly forecast leaves the strip empty; a
+# note sits at the height of its icons instead, so the space does
+# not read as a fault.
+Y_NO_HOURLY = HOUR_ICON_CY + 7
 # A black tile behind any hourly icon falling after sunset, so the
 # stars and clouds sit against night rather than against the day
 # ground.  Offset left of the column centre because the icons are
@@ -1166,6 +1172,7 @@ def _layout_context() -> dict[str, object]:
         "solar_icon_x": SOLAR_ICON_X,
         "y_hour_label": Y_HOUR_LABEL,
         "hour_icon_cy": HOUR_ICON_CY,
+        "y_no_hourly": Y_NO_HOURLY,
         "tile_w": NIGHT_TILE_W,
         "tile_h": NIGHT_TILE_H,
         "tile_dx": NIGHT_TILE_DX,
@@ -1632,6 +1639,7 @@ def _build_weather_wall_context(
         "rain_mid": round(rain_mid, 1),
         "rain_peak": _percent(rain_day.get("precipitation_probability")),
         "caption": s["chance"][_precip_word(hours_raw)],
+        "hours_note": "" if hours_raw else s["no_hourly"],
         "days": _day_strip(
             daily,
             widget.get("forecast_days", 7),
