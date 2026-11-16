@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class RenderNotReady(Exception):
-    """A widget's data has not loaded yet: skip this render, keep the last image.
+    """A widget's data has not loaded yet; keep the last good image.
 
     Raise this only for transient conditions, such as an entity that is
     absent from the states snapshot while Home Assistant is still

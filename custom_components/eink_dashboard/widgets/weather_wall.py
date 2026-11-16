@@ -43,10 +43,14 @@ import datetime as _dt
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ._helpers import _color_context, _widget_dim
 from ..exceptions import RenderNotReady
+from ._helpers import _color_context, _widget_dim
+
+if TYPE_CHECKING:
+    from ..const import DisplayConfig
+    from ..widget_config import WeatherWallWidget
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,13 +64,14 @@ _LOGGER = logging.getLogger(__name__)
 _CLIMATOLOGY_PATH = Path(__file__).parent.parent / "climatology.json"
 
 try:
-    _CLIMATOLOGY: dict = json.loads(
-        _CLIMATOLOGY_PATH.read_text()
-    ).get("days", {})
+    _CLIMATOLOGY: dict = json.loads(_CLIMATOLOGY_PATH.read_text()).get(
+        "days", {}
+    )
 except Exception as exc:  # noqa: BLE001
     _LOGGER.warning(
         "weather_wall: no climatology table (%s); the remarkable "
-        "line will be suppressed", exc
+        "line will be suppressed",
+        exc,
     )
     _CLIMATOLOGY = {}
 
@@ -123,7 +128,7 @@ _PERCENT_EM = {
     "Roboto": 0.76,
     "Drogowskaz": 0.70,
 }
-_PERCENT_EM_DEFAULT = 0.
+_PERCENT_EM_DEFAULT = 0.0
 
 # Palettes, keyed as the integration's color_scheme reports them.
 #
@@ -141,38 +146,52 @@ _PERCENT_EM_DEFAULT = 0.
 # c_warn_stroke draws an outline round the warning badge; "none"
 # where the badge is a filled block.
 _LIGHT = {
-    "c_bg": "#FFFFFF", "c_fg": "#000000", "c_dark": "#000000",
+    "c_bg": "#FFFFFF",
+    "c_fg": "#000000",
+    "c_dark": "#000000",
     "c_night": "#FFFFFF",
 }
 
 _PALETTES = {
     "bwgbry": {
-        "c_bg": "#0000FF", "c_fg": "#FFFFFF", "c_dark": "#000000",
-        "c_night": "#000000", "c_sun": "#FFFF00",
-        "c_warn": "#FF0000", "c_warn_fg": "#FFFFFF",
+        "c_bg": "#0000FF",
+        "c_fg": "#FFFFFF",
+        "c_dark": "#000000",
+        "c_night": "#000000",
+        "c_sun": "#FFFF00",
+        "c_warn": "#FF0000",
+        "c_warn_fg": "#FFFFFF",
         "c_warn_stroke": "none",
     },
     "bwry": {
-        **_LIGHT, "c_sun": "#FFFF00",
-        "c_warn": "#FF0000", "c_warn_fg": "#FFFFFF",
+        **_LIGHT,
+        "c_sun": "#FFFF00",
+        "c_warn": "#FF0000",
+        "c_warn_fg": "#FFFFFF",
         "c_warn_stroke": "none",
     },
     "bwr": {
-        **_LIGHT, "c_sun": "#000000",
-        "c_warn": "#FF0000", "c_warn_fg": "#FFFFFF",
+        **_LIGHT,
+        "c_sun": "#000000",
+        "c_warn": "#FF0000",
+        "c_warn_fg": "#FFFFFF",
         "c_warn_stroke": "none",
     },
     "bwy": {
-        **_LIGHT, "c_sun": "#FFFF00",
-        "c_warn": "#FFFF00", "c_warn_fg": "#000000",
+        **_LIGHT,
+        "c_sun": "#FFFF00",
+        "c_warn": "#FFFF00",
+        "c_warn_fg": "#000000",
         "c_warn_stroke": "none",
     },
     # Greyscale is a compatibility mode: black on white throughout,
     # and an outlined badge, since a filled one would be a block of
     # dithered grey.
     "grey": {
-        **_LIGHT, "c_sun": "#000000",
-        "c_warn": "none", "c_warn_fg": "#000000",
+        **_LIGHT,
+        "c_sun": "#000000",
+        "c_warn": "none",
+        "c_warn_fg": "#000000",
         "c_warn_stroke": "#000000",
     },
 }
@@ -181,7 +200,9 @@ _PALETTES = {
 _PALETTE_GREY = "grey"
 
 
-def _palette(widget: dict, config: dict) -> dict[str, str]:
+def _palette(
+    widget: WeatherWallWidget, config: DisplayConfig
+) -> dict[str, str]:
     """Choose the palette for this render.
 
     The widget's own ``palette`` option wins when set, which is how
@@ -193,6 +214,7 @@ def _palette(widget: dict, config: dict) -> dict[str, str]:
     if chosen == "auto":
         chosen = str(config.get("color_scheme") or _PALETTE_GREY)
     return dict(_PALETTES.get(chosen, _PALETTES[_PALETTE_GREY]))
+
 
 # Curated panel vocabulary, in the manner of render.py's
 # _RELATIVE_DAY_PHRASES.  The same rule applies: only languages
@@ -266,6 +288,7 @@ def _phrases(language: str) -> dict[str, Any]:
         else:
             merged[key] = value
     return merged
+
 
 # Left block: the headline.
 LEFT_X = MARGIN
@@ -618,6 +641,7 @@ def _overnight_slice(
             break
     return out
 
+
 def _overnight_summary(
     overnight: list[dict[str, Any]],
 ) -> tuple[float | None, dict[str, Any]]:
@@ -635,12 +659,14 @@ def _overnight_summary(
     if not overnight:
         return None, {}
     covers = [
-        c for e in overnight
+        c
+        for e in overnight
         if (c := _num(e.get("cloud_coverage"))) is not None
     ]
     cover = sum(covers) / len(covers) if covers else None
     worst = max(overnight, key=lambda e: _drop_count(e, HERO_PROB_MIN))
     return cover, worst
+
 
 def _frost_warning(
     overnight: list[dict[str, Any]],
@@ -660,16 +686,16 @@ def _frost_warning(
         ``"ground_frost"`` or ``""``.
     """
     temps = [
-        t for e in overnight
-        if (t := _num(e.get("temperature"))) is not None
+        t for e in overnight if (t := _num(e.get("temperature"))) is not None
     ]
     if not temps:
         return ""
     low = min(temps)
 
-    wet = sum(
-        _num(e.get("precipitation")) or 0.0 for e in preceding
-    ) >= ICE_PRECIP_MM
+    wet = (
+        sum(_num(e.get("precipitation")) or 0.0 for e in preceding)
+        >= ICE_PRECIP_MM
+    )
 
     if low <= FROST_AIR and wet:
         return "icy"
@@ -680,11 +706,13 @@ def _frost_warning(
 
     if low <= FROST_GROUND:
         clouds = [
-            c for e in overnight
+            c
+            for e in overnight
             if (c := _num(e.get("cloud_coverage"))) is not None
         ]
         winds = [
-            w for e in overnight
+            w
+            for e in overnight
             if (w := _num(e.get("wind_speed"))) is not None
         ]
         clear = not clouds or min(clouds) < FROST_GROUND_CLOUD
@@ -692,6 +720,7 @@ def _frost_warning(
         if clear and calm:
             return "ground_frost"
     return ""
+
 
 def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
     """Return a short note when one measure is unusual, else "".
@@ -710,6 +739,7 @@ def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
         bands = _CLIMATOLOGY.get(f"{when.month:02d}-{when.day:02d}")
 
     if bands:
+
         def over(measure: str, value: float | None, floor: float):
             """Relative margin above the upper percentile, or None."""
             limit = bands.get(measure, {}).get(REMARK_HIGH)
@@ -721,12 +751,12 @@ def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
 
         uv = _num(day.get("uv_index"))
         margin = over("uv", uv, REMARK_UV_MIN)
-        if margin is not None:
+        if margin is not None and uv is not None:
             candidates.append((margin, s["uv_value"].format(v=round(uv))))
 
         gust = _num(day.get("wind_gust_speed"))
         margin = over("gust", gust, REMARK_GUST_MIN)
-        if margin is not None:
+        if margin is not None and gust is not None:
             candidates.append((margin, s["gust"].format(v=round(gust))))
 
         # Two-tailed, measured against the width of the band rather
@@ -739,15 +769,20 @@ def _remarkable(day: dict[str, Any], when: Any, s: dict) -> str:
             width = max(1.0, warm - cold)
             t = _signed(_temp(low))
             if low < cold:
-                candidates.append(((cold - low) / width, s["cold"].format(t=t)))
+                candidates.append(
+                    ((cold - low) / width, s["cold"].format(t=t))
+                )
             elif low > warm:
-                candidates.append(((low - warm) / width, s["mild"].format(t=t)))
+                candidates.append(
+                    ((low - warm) / width, s["mild"].format(t=t))
+                )
 
     if candidates:
         return max(candidates, key=lambda c: c[0])[1]
     if low is not None and low <= COLD_NOTE_AT:
         return s["min"].format(t=_signed(_temp(low)))
     return ""
+
 
 def _rain_path(entries: list[dict[str, Any]]) -> tuple[str, float]:
     """Build the stepped rain-probability profile.
@@ -870,80 +905,15 @@ def _font_context(override: str) -> dict[str, object]:
     return ctx
 
 
-def _build_weather_wall_context(
-    widget: dict,
-    config: dict,
-) -> dict[str, object]:
-    """Build the Jinja2 template context for the weather wall widget.
+def _layout_context() -> dict[str, object]:
+    """Return the fixed geometry the template draws with.
 
-    Args:
-        widget: Widget config dict.  Recognised keys: ``entity``,
-            ``moon_entity``, ``temperature_entity``,
-            ``forecast_days``, ``uv_hide_below``, ``uv_warn_above``,
-            ``force_state``, ``x``, ``y``, ``w``, ``h``.
-        config: Display config with ``width``, ``height`` and
-            ``states``.
-
-    Returns:
-        Template context dict consumed by ``weather_wall.svg.j2``.
+    All of it is in the 800 x 480 design space; the template's
+    viewBox scales it to the widget's actual size.
     """
-    from homeassistant.util import dt as hass_dt
-
-    x = widget.get("x", 0)
-    y = widget.get("y", 0)
-    svg_w = _widget_dim(widget, "w", config["width"] - x)
-    svg_h = _widget_dim(widget, "h", config["height"] - y)
-
-    states = config.get("states", {})
-    entity_id = widget.get("entity", "")
-    entity = states.get(entity_id)
-
-    now = hass_dt.now()
-
-    # The typeface.  By default the widget follows the dashboard's
-    # font family, through the same helpers as the stock templates,
-    # so a TRMNL dashboard gets the pixel font at its snapped sizes
-    # and Inter for the large figures.
-    #
-    # A per-widget font_family overrides that with any face the
-    # renderer can find, such as one in the custom font directory.
-    # It is drawn at the design sizes, unsnapped and anti-aliased,
-    # whatever the dashboard's settings, and Roboto stays behind it
-    # in the stack so a glyph the face lacks, such as the true minus,
-    # falls back rather than rendering nothing.
-    override = str(widget.get("font_family") or "").strip()
-    fonts = _font_context(override)
-
-    # Dates and weekday names come from Babel through the
-    # integration's own helpers, so they match its other widgets;
-    # the remaining vocabulary comes from _WALL_PHRASES.
-    from ..render import _babel_format_date, _weekday_abbrev
-
-    lang = str(config.get("language") or "en")
-    s = _phrases(lang)
-
-    # Provisional layout, decided on the clock alone.  This has to
-    # happen before `base` is built, because `base` carries it into
-    # the template and into the early returns below.  It is refined
-    # once the states snapshot is available, further down.
-    forced = widget.get("force_state", "auto")
-    if forced in ("morning", "evening", "night"):
-        state = forced
-    elif now.hour >= EVENING_FROM:
-        state = "evening"
-    else:
-        state = "morning"
-
-    base: dict[str, object] = {
-        "w": svg_w,
-        "h": svg_h,
+    return {
         "design_w": DESIGN_W,
         "design_h": DESIGN_H,
-        **fonts,
-        "s_uv": s["uv"],
-        **_palette(widget, config),
-        "state": state,
-        "is_night": state == "night",
         "night_w": NIGHT_W,
         "night_h": NIGHT_H,
         "margin": MARGIN,
@@ -985,9 +955,320 @@ def _build_weather_wall_context(
         "y_day_temp": Y_DAY_TEMP,
         "y_day_prob": Y_DAY_PROB,
         "y_day_remark": Y_DAY_REMARK,
-        "header_max": "",
-        **_color_context(),
     }
+
+
+def _clock_state(forced: object, now: _dt.datetime) -> str:
+    """Return the layout decided on the clock alone.
+
+    A ``force_state`` of morning, evening or night wins.  Otherwise
+    it is evening from ``EVENING_FROM`` and morning before; whether
+    the evening is in fact night depends on the sun, which the
+    caller decides once it has the states snapshot.
+    """
+    if forced in ("morning", "evening", "night"):
+        return str(forced)
+    if now.hour >= EVENING_FROM:
+        return "evening"
+    return "morning"
+
+
+def _second_line(
+    state: str,
+    today: dict[str, Any],
+    hourly: list[dict[str, Any]],
+    sun: tuple[Any, Any, bool],
+    hass_dt: Any,
+    now: _dt.datetime,
+    s: dict[str, Any],
+) -> tuple[str, str]:
+    """Return the kind and text of the line under the headline.
+
+    In the morning, the overnight low.  In the evening while the sun
+    is still up, the times of sunset and sunrise.  After dark, a
+    frost warning when the hours ahead call for one.
+
+    Args:
+        sun: ``(sunset, sunrise, sun_up)``.
+
+    Returns:
+        ``(kind, text)``: kind is ``"plain"``, ``"solar"``,
+        ``"warn"`` or ``""`` when there is nothing to say.
+    """
+    sunset, sunrise, sun_up = sun
+    if state == "morning":
+        low = _temp(today.get("templow"))
+        if low["show"]:
+            return "plain", s["overnight"].format(t=_signed(low))
+        return "", ""
+    if sun_up and sunset and sunrise:
+        return "solar", (
+            f"{sunset.strftime('%H:%M')} – {sunrise.strftime('%H:%M')}"
+        )
+    overnight = _overnight_slice(hourly, hass_dt, now)
+    preceding = [
+        e
+        for e in hourly
+        if (when := _local(hass_dt, e.get("datetime"))) is not None
+        and now - _dt.timedelta(hours=6) <= when <= now
+    ]
+    warn = _frost_warning(overnight, preceding)
+    if warn:
+        return "warn", s["warnings"].get(warn, warn)
+    return "", ""
+
+
+def _wind_text(today: dict[str, Any], unit: str) -> str:
+    """Return the wind line: bearing, mean speed and any gust.
+
+    The gust only earns its place when it is meaningfully above the
+    mean; a range of a few km/h is noise dressed as detail.
+    """
+    gust = _num(today.get("wind_gust_speed"))
+    speed = _num(today.get("wind_speed"))
+    bearing = _compass(today.get("wind_bearing"))
+    if speed is None:
+        return ""
+    if (
+        gust is not None
+        and speed > 0
+        and gust >= speed * GUST_RATIO
+        and gust - speed >= GUST_MARGIN
+    ):
+        return f"{bearing} {round(speed)}–{round(gust)} {unit}"
+    return f"{bearing} {round(speed)} {unit}"
+
+
+def _uv_context(
+    widget: WeatherWallWidget, today: dict[str, Any], state: str
+) -> dict[str, object]:
+    """Return the UV badge: whether to show it, warn, and its text.
+
+    Morning only.  The index is a daily maximum, so in the evening it
+    describes a day that is over, and next to tonight's low or
+    tomorrow's hours it reads as though it applied now.
+    """
+    hide_below = _num(widget.get("uv_hide_below"))
+    hide_below = UV_HIDE_BELOW if hide_below is None else hide_below
+    warn_above = _num(widget.get("uv_warn_above"))
+    warn_above = UV_WARN_ABOVE if warn_above is None else warn_above
+    uv = _num(today.get("uv_index"))
+    show = state == "morning" and uv is not None and uv >= hide_below
+    return {
+        "uv_show": show,
+        "uv_warn": show and uv is not None and uv > warn_above,
+        "uv_text": f"{round(uv)}" if uv is not None else "",
+    }
+
+
+def _hour_is_dark(when: Any, sunset: Any, sunrise: Any) -> bool:
+    """Return whether most of the hour starting at ``when`` is dark.
+
+    Tested at the middle of the hour the entry describes, not at its
+    start.  A column labelled 19 covers 19:00 to 20:00, so with
+    sunset at 19:07 most of it is dark and the icon should say so;
+    testing the instant would call it day.
+
+    sun.sun reports only the next rising and setting, so comparing an
+    arbitrary forecast hour against them gives the wrong answer as
+    soon as either has passed.  Both are shifted onto the hour's own
+    date before comparing.  They drift a minute or two a day, which
+    is well within tolerance for a two-hourly strip.
+    """
+    if when is None or sunset is None or sunrise is None:
+        return False
+    mid = when + _dt.timedelta(minutes=30)
+    up = sunrise.replace(year=mid.year, month=mid.month, day=mid.day)
+    down = sunset.replace(year=mid.year, month=mid.month, day=mid.day)
+    return mid < up or mid >= down
+
+
+def _hour_strip(
+    hours_raw: list[dict[str, Any]],
+    hass_dt: Any,
+    sunset: Any,
+    sunrise: Any,
+) -> list[dict[str, object]]:
+    """Return the columns of the two-hourly strip on the right."""
+    hours = []
+    for i, e in enumerate(hours_raw):
+        dark = _hour_is_dark(
+            _local(hass_dt, e.get("datetime")), sunset, sunrise
+        )
+        hours.append(
+            {
+                "cx": round(RIGHT_X + HOUR_W * (i + 0.5), 1),
+                "icon": _icon_name(e, dark),
+                "dark": dark,
+                "label": e.get("_label", ""),
+                "temp": _temp(e.get("temperature")),
+            }
+        )
+    return hours
+
+
+def _percent(value: Any) -> str:
+    """Return a probability as ``"40%"``, or ``""`` below ``PROB_MIN``."""
+    prob = _num(value)
+    if prob is None or prob < PROB_MIN:
+        return ""
+    return f"{round(prob)}%"
+
+
+def _hero_context(
+    night: bool,
+    today: dict[str, Any],
+    overnight: list[dict[str, Any]],
+    moon_state: object,
+) -> dict[str, object]:
+    """Return the large icon: weather by day, moon and cloud by night.
+
+    At night the icon is built from the overnight hourly slice rather
+    than from the daily entry, which describes a day that is largely
+    over and carries no cloud cover at all.  The cloud is drawn as
+    its own element rather than through wx-moon-cloud, whose moon is
+    a fixed gibbous; composing the two lets the real phase show
+    behind it.
+    """
+    moon_phase = ""
+    hero_icon = ""
+    if night:
+        cover, worst = _overnight_summary(overnight)
+        if not worst:
+            worst = today
+        wet = _drop_count(worst, HERO_PROB_MIN) > 0
+
+        # Without an hourly slice there is no cover to judge by, so
+        # the condition string stands in: clear or nothing.
+        if cover is None:
+            clear = str(worst.get("condition", "")) in (
+                "clear-night",
+                "sunny",
+            )
+            cover = 0.0 if clear else 100.0
+
+        if not wet and cover < MOON_HIDDEN_AT:
+            moon_phase = _MOON_PHASES.get(str(moon_state), "")
+
+        if wet:
+            hero_icon = _icon_name(worst, True, HERO_PROB_MIN)
+        elif cover >= CLOUD_IS_DARK:
+            hero_icon = "wx-cloud-dark"
+        elif cover >= MOON_CLEAR_BELOW:
+            hero_icon = "wx-cloud"
+    else:
+        hero_icon = _icon_name(today, False, HERO_PROB_MIN)
+
+    behind = bool(moon_phase and hero_icon)
+    return {
+        "hero_icon": hero_icon,
+        "moon_phase": moon_phase,
+        "moon_scale": (
+            round(HERO_SCALE * MOON_BEHIND_SCALE, 3) if behind else HERO_SCALE
+        ),
+        "moon_dx": MOON_BEHIND_DX if behind else 0,
+        "moon_dy": MOON_BEHIND_DY if behind else 0,
+    }
+
+
+def _day_strip(
+    daily: list[dict[str, Any]],
+    forecast_days: Any,
+    state: str,
+    hass_dt: Any,
+    lang: str,
+    s: dict[str, Any],
+) -> list[dict[str, object]]:
+    """Return the columns of the week's outlook along the bottom.
+
+    The provider gives a fixed number of days, so the strip is
+    shorter in the evening, where tomorrow has already been spent on
+    the top right.  The width is divided by what actually arrived
+    rather than by the requested count, or the last column would sit
+    in a gap and read as missing data.
+    """
+    from ..render import _weekday_abbrev
+
+    try:
+        want = max(3, min(DAY_COLS, int(forecast_days)))
+    except (TypeError, ValueError):
+        want = DAY_COLS
+    first = 1 if state == "morning" else 2
+    week = daily[first : first + want]
+    n_days = max(1, len(week))
+    day_w = (CANVAS_W - 2 * MARGIN - (n_days - 1) * DAY_GUTTER) / n_days
+    days = []
+    for i, e in enumerate(week):
+        when = _local(hass_dt, e.get("datetime"))
+        days.append(
+            {
+                "cx": round(MARGIN + (day_w + DAY_GUTTER) * i + day_w / 2, 1),
+                # The day strip always describes daytime, whatever
+                # the hour the panel is rendered at, so never the
+                # night icon.
+                "icon": _icon_name(e, False),
+                "label": _weekday_abbrev(when.date(), lang) if when else "",
+                "temp": _temp(e.get("temperature")),
+                "prob": _percent(e.get("precipitation_probability")),
+                "remark": _remarkable(e, when, s),
+            }
+        )
+    return days
+
+
+def _build_weather_wall_context(
+    widget: WeatherWallWidget,
+    config: DisplayConfig,
+) -> dict[str, object]:
+    """Build the Jinja2 template context for the weather wall widget.
+
+    Args:
+        widget: Widget config.  Recognised keys: ``entity``,
+            ``moon_entity``, ``temperature_entity``,
+            ``forecast_days``, ``uv_hide_below``, ``uv_warn_above``,
+            ``force_state``, ``font_family``, ``palette``, ``x``,
+            ``y``, ``w``, ``h``.
+        config: Display config with ``width``, ``height``,
+            ``states``, ``language`` and ``color_scheme``.
+
+    Returns:
+        Template context dict consumed by ``weather_wall.svg.j2``.
+
+    Raises:
+        RenderNotReady: The weather entity or its daily forecast is
+            missing, so the last good image should be kept.
+    """
+    from homeassistant.util import dt as hass_dt
+
+    # Dates and weekday names come from Babel through the
+    # integration's own helpers, so they match its other widgets;
+    # the remaining vocabulary comes from _WALL_PHRASES.
+    from ..render import _babel_format_date
+
+    x = widget.get("x", 0)
+    y = widget.get("y", 0)
+    svg_w = _widget_dim(widget, "w", config["width"] - x)
+    svg_h = _widget_dim(widget, "h", config["height"] - y)
+
+    states = config.get("states", {})
+    entity_id = widget.get("entity", "")
+    entity = states.get(entity_id)
+    now = hass_dt.now()
+    lang = str(config.get("language") or "en")
+    s = _phrases(lang)
+
+    # The typeface.  By default the widget follows the dashboard's
+    # font family, through the same helpers as the stock templates,
+    # so a TRMNL dashboard gets the pixel font at its snapped sizes
+    # and Inter for the large figures.
+    #
+    # A per-widget font_family overrides that with any face the
+    # renderer can find, such as one in the custom font directory.
+    # It is drawn at the design sizes, unsnapped and anti-aliased,
+    # whatever the dashboard's settings, and Roboto stays behind it
+    # in the stack so a glyph the face lacks, such as the true minus,
+    # falls back rather than rendering nothing.
+    fonts = _font_context(str(widget.get("font_family") or "").strip())
 
     if entity is None:
         raise RenderNotReady(
@@ -1009,92 +1290,40 @@ def _build_weather_wall_context(
     tomorrow = daily[1] if len(daily) > 1 else {}
 
     # Sunrise and sunset come from sun.sun, which is always loaded.
+    # It reports only the *next* rising and the *next* setting, so
+    # after sunset next_setting is tomorrow's, and comparing it
+    # against now says the sun has not gone down.  The entity's own
+    # state answers the question directly.
     sun_state = states.get("sun.sun", {})
     sun = sun_state.get("attributes", {})
     sunset = _local(hass_dt, sun.get("next_setting"))
     sunrise = _local(hass_dt, sun.get("next_rising"))
-    # sun.sun reports only the *next* rising and the *next* setting,
-    # so after sunset next_setting is tomorrow's, and comparing it
-    # against now says the sun has not gone down.  The entity's own
-    # state answers the question directly.
     sun_up = sun_state.get("state") == "above_horizon"
-    sunset_ahead = sun_up
 
     # Night is defined by the sun rather than the clock: in December
-    # the panel should go dark at six, in June not until ten.  This
-    # is decided here rather than above because it needs the states
-    # snapshot, so `base` has to be corrected after the fact.
+    # the panel should go dark at six, in June not until ten.
+    forced = widget.get("force_state", "auto")
+    state = _clock_state(forced, now)
     if forced == "auto" and state == "evening" and not sun_up:
         state = "night"
-    base["state"] = state
-    base["is_night"] = state == "night"
-
-    night = state != "morning"
+    morning = state == "morning"
 
     # ---- headline --------------------------------------------
-    if state == "morning":
-        headline = _temp(today.get("temperature"))
-    else:
-        headline = _temp(today.get("templow"))
-
-    # A temperature sensor override applies only to the morning
-    # headline, where the number is a live reading rather than a
-    # forecast maximum.
+    headline = _temp(today.get("temperature" if morning else "templow"))
+    # A temperature sensor applies only to the morning headline,
+    # where the number is a live reading rather than a forecast.
     temp_entity = widget.get("temperature_entity", "")
-    if state == "morning" and temp_entity:
-        override = states.get(temp_entity)
-        if override is not None:
-            headline = _temp(override.get("state"))
+    if morning and temp_entity:
+        reading = states.get(temp_entity)
+        if reading is not None:
+            headline = _temp(reading.get("state"))
 
- 
-    # ---- the second line -------------------------------------
-    line2_kind = ""
-    line2_text = ""
-    if state == "morning":
-        low = _temp(today.get("templow"))
-        if low["show"]:
-            line2_kind = "plain"
-            line2_text = s["overnight"].format(t=_signed(low))
-    elif sunset_ahead and sunset and sunrise:
-        line2_kind = "solar"
-        line2_text = (
-            f"{sunset.strftime('%H:%M')} \u2013 "
-            f"{sunrise.strftime('%H:%M')}"
-        )
-    else:
-        overnight = _overnight_slice(hourly, hass_dt, now)
-        preceding = [
-            e for e in hourly
-            if (when := _local(hass_dt, e.get("datetime"))) is not None
-            and now - _dt.timedelta(hours=6) <= when <= now
-        ]
-        warn = _frost_warning(overnight, preceding)
-        if warn:
-            line2_kind = "warn"
-            line2_text = s["warnings"].get(warn, warn)
+    line2_kind, line2_text = _second_line(
+        state, today, hourly, (sunset, sunrise, sun_up), hass_dt, now, s
+    )
 
     # ---- the bottom metrics line -----------------------------
-    gust = _num(today.get("wind_gust_speed"))
-    speed = _num(today.get("wind_speed"))
-    unit = attrs.get("wind_speed_unit", "km/h")
-    bearing = _compass(today.get("wind_bearing"))
-    # The gust only earns its place when it is meaningfully above
-    # the mean; a range of a few km/h is noise dressed as detail.
-    gusty = (
-        speed is not None
-        and gust is not None
-        and speed > 0
-        and gust >= speed * GUST_RATIO
-        and gust - speed >= GUST_MARGIN
-    )
-    if gusty:
-        wind_text = f"{bearing} {round(speed)}\u2013{round(gust)} {unit}"
-    elif speed is not None:
-        wind_text = f"{bearing} {round(speed)} {unit}"
-    else:
-        wind_text = ""
-
-    if state == "morning":
+    if morning:
         solar_text = sunset.strftime("%H:%M") if sunset else ""
     elif line2_kind == "solar":
         # Both times are already on the line above.
@@ -1102,177 +1331,56 @@ def _build_weather_wall_context(
     else:
         solar_text = sunrise.strftime("%H:%M") if sunrise else ""
 
-    # ---- ultraviolet -----------------------------------------
-        # Morning only.  The index is a daily maximum, so in the evening
-        # it describes a day that is over, and next to tonight's low or
-        # tomorrow's hours it reads as though it applied now.
-    hide_below = _num(widget.get("uv_hide_below"))
-    hide_below = UV_HIDE_BELOW if hide_below is None else hide_below
-    warn_above = _num(widget.get("uv_warn_above"))
-    warn_above = UV_WARN_ABOVE if warn_above is None else warn_above
-    uv = _num(today.get("uv_index"))
-    uv_show = state == "morning" and uv is not None and uv >= hide_below
-    uv_warn = uv_show and uv > warn_above
-
     # ---- the right-hand strip --------------------------------
     hours_raw = _pick_hours(hourly, hass_dt, now, state)
-    hours = []
-    for i, e in enumerate(hours_raw):
-        when = _local(hass_dt, e.get("datetime"))
-        # sun.sun gives only the next rising and the next setting,
-        # so comparing an arbitrary forecast hour against them gives
-        # the wrong answer as soon as either has passed.  Shift both
-        # onto the hour's own date and compare within that day.
-        # Sunrise and sunset drift a minute or two per day, so for
-        # an hour several days out this is approximate; well within
-        # tolerance for a two-hourly strip.
-        # Tested at the middle of the hour the entry describes,
-        # not at its start.  A column labelled 19 covers 19:00 to
-        # 20:00, so with sunset at 19:07 most of it is dark and the
-        # icon should say so; testing the instant would call it day.
-        #
-        # sun.sun reports only the next rising and setting, so both
-        # are shifted onto the hour's own date before comparing.
-        # They drift a minute or two a day, which is well within
-        # tolerance for a two-hourly strip.
-        dark = False
-        if when is not None and sunset is not None and sunrise is not None:
-            mid = when + _dt.timedelta(minutes=30)
-            up = sunrise.replace(
-                year=mid.year, month=mid.month, day=mid.day
-            )
-            down = sunset.replace(
-                year=mid.year, month=mid.month, day=mid.day
-            )
-            dark = mid < up or mid >= down
-        hours.append({
-            "cx": round(RIGHT_X + HOUR_W * (i + 0.5), 1),
-            "icon": _icon_name(e, dark),
-            "dark": dark,
-            "label": e.get("_label", ""),
-            "temp": _temp(e.get("temperature")),
-        })
     rain_d, rain_mid = _rain_path(hours_raw)
-    caption = s["chance"][_precip_word(hours_raw)]
     # The daily figure for whichever day the strip covers, not the
     # peak across its hours: a maximum overstates, since fifteen per
     # cent for one hour is not fifteen per cent all day.
-    rain_day = today if state == "morning" else tomorrow
-    rain_prob = _num(rain_day.get("precipitation_probability"))
-    rain_peak = (
-        f"{round(rain_prob)}%"
-        if rain_prob is not None and rain_prob >= PROB_MIN
-        else ""
-    )
+    rain_day = today if morning else tomorrow
 
-   # ---- the hero icon, moon or weather ----------------------
-    moon_phase = ""
-    hero_icon = ""
-    if night:
-        # Built from the overnight hourly slice rather than from the
-        # daily entry, which describes a day that is largely over
-        # and carries no cloud cover at all.
-        overnight = _overnight_slice(hourly, hass_dt, now)
-        cover, worst = _overnight_summary(overnight)
-        if not worst:
-            worst = today
-        wet = _drop_count(worst, HERO_PROB_MIN) > 0
-
-        # Without an hourly slice there is no cover to judge by, so
-        # the condition string stands in: clear or nothing.
-        if cover is None:
-            clear = str(worst.get("condition", "")) in (
-                "clear-night", "sunny"
-            )
-            cover = 0.0 if clear else 100.0
-
-        if not wet and cover < MOON_HIDDEN_AT:
-            moon_state = states.get(
-                widget.get("moon_entity", "sensor.moon_phase"), {}
-            ).get("state", "")
-            moon_phase = _MOON_PHASES.get(str(moon_state), "")
-
-        # The cloud is drawn as its own element rather than through
-        # wx-moon-cloud, whose moon is a fixed gibbous; composing the
-        # two lets the real phase show behind it.
-        if wet:
-            hero_icon = _icon_name(worst, True, HERO_PROB_MIN)
-        elif cover >= CLOUD_IS_DARK:
-            hero_icon = "wx-cloud-dark"
-        elif cover >= MOON_CLEAR_BELOW:
-            hero_icon = "wx-cloud"
-    else:
-        hero_icon = _icon_name(today, False, HERO_PROB_MIN)
-
-    if moon_phase and hero_icon:
-        moon_scale = round(HERO_SCALE * MOON_BEHIND_SCALE, 3)
-        moon_dx = MOON_BEHIND_DX
-        moon_dy = MOON_BEHIND_DY
-    else:
-        moon_scale = HERO_SCALE
-        moon_dx = 0
-        moon_dy = 0
-
-    # ---- the day strip ---------------------------------------
-    try:
-        want = max(3, min(DAY_COLS, int(widget.get("forecast_days", 7))))
-    except (TypeError, ValueError):
-        want = DAY_COLS
-    first = 1 if state == "morning" else 2
-    week = daily[first:first + want]
-    # The provider gives a fixed number of days, so the strip is
-    # shorter in the evening, where tomorrow has already been spent
-    # on the top right.  Divide the width by what actually arrived
-    # rather than by the requested count, or the last column sits in
-    # a gap and reads as missing data.
-    n_days = max(1, len(week))
-    day_w = (CANVAS_W - 2 * MARGIN - (n_days - 1) * DAY_GUTTER) / n_days
-    days = []
-    for i, e in enumerate(week):
-        when = _local(hass_dt, e.get("datetime"))
-        prob = _num(e.get("precipitation_probability"))
-        days.append({
-            "cx": round(MARGIN + (day_w + DAY_GUTTER) * i + day_w / 2, 1),
-            # The day strip always describes daytime, whatever the
-            # hour the panel is rendered at, so never the night icon.
-            "icon": _icon_name(e, False),
-            "label": _weekday_abbrev(when.date(), lang) if when else "",
-            "temp": _temp(e.get("temperature")),
-            "prob": (
-                f"{round(prob)}%"
-                if prob is not None and prob >= PROB_MIN
-                else ""
-            ),
-            "remark": _remarkable(e, when, s),
-        })
-
-    if state != "morning":
+    header_max = ""
+    if not morning:
         hi = _temp(tomorrow.get("temperature"))
-        base["header_max"] = s["max"].format(t=_signed(hi)) if hi["show"] else ""
+        header_max = s["max"].format(t=_signed(hi)) if hi["show"] else ""
+
+    moon_state = states.get(
+        widget.get("moon_entity", "sensor.moon_phase"), {}
+    ).get("state", "")
 
     return {
-        **base,
+        "w": svg_w,
+        "h": svg_h,
+        **_layout_context(),
+        **fonts,
+        "s_uv": s["uv"],
+        **_palette(widget, config),
+        **_color_context(),
+        "state": state,
+        "is_night": state == "night",
         "has_state": True,
         "date_text": _babel_format_date(now.date(), "EEEE d MMMM", lang),
-        "hero_icon": hero_icon,
-        "moon_phase": moon_phase,
-        "moon_scale": moon_scale,
-        "moon_dx": moon_dx,
-        "moon_dy": moon_dy,
+        **_hero_context(
+            not morning,
+            today,
+            _overnight_slice(hourly, hass_dt, now) if not morning else [],
+            moon_state,
+        ),
         "headline": headline,
         "line2_kind": line2_kind,
         "line2_text": line2_text,
-        "wind_text": wind_text,
+        "wind_text": _wind_text(today, attrs.get("wind_speed_unit", "km/h")),
         "solar_text": solar_text,
-        "uv_show": uv_show,
-        "uv_warn": uv_warn,
-        "uv_text": f"{round(uv)}" if uv is not None else "",
-        "header_left": "" if state == "morning" else s["tomorrow"],
+        **_uv_context(widget, today, state),
+        "header_left": "" if morning else s["tomorrow"],
+        "header_max": header_max,
         "header_uv": "",
-        "hours": hours,
+        "hours": _hour_strip(hours_raw, hass_dt, sunset, sunrise),
         "rain_d": rain_d,
         "rain_mid": round(rain_mid, 1),
-        "rain_peak": rain_peak,
-        "caption": caption,
-        "days": days,
+        "rain_peak": _percent(rain_day.get("precipitation_probability")),
+        "caption": s["chance"][_precip_word(hours_raw)],
+        "days": _day_strip(
+            daily, widget.get("forecast_days", 7), state, hass_dt, lang, s
+        ),
     }
